@@ -58,8 +58,10 @@ private const val CONFIRM_PHRASE = "REMOVE"
  * AppBlockAccessibilityService's Tier 1 doc). That keeps the app impossible to strip via a
  * few casual taps while guaranteeing the device owner always has a real, working way out.
  *
- * Invariant 1 lives here: while Tier 1 is armed this screen is the user's only route back to
- * Accessibility and Device Admin settings. Every branch below therefore ends in a button that
+ * While a lock runs it refuses, on purpose: "can't be uninstalled mid-lock" is the app's whole
+ * promise, and the exits then are the timer, an unlock key, or Safe Mode (the README's threat
+ * model). Once no lock is running, invariant 1 lives here: while Tier 1 is armed this screen is
+ * the user's only route back to Accessibility and Device Admin settings. Every branch below therefore ends in a button that
  * leaves the screen, and the removal path stays a plain in-process call with nothing between the
  * confirm and [DeviceAdminHelper.removeAdmin] that could throw. Presentation is free to change;
  * that structure is not.
@@ -70,13 +72,16 @@ fun RemoveProtectionScreen(onDone: () -> Unit) {
     val context = LocalContext.current
     val app = context.applicationContext as BlockApplication
 
-    var locks by remember { mutableStateOf<List<BlockedAppEntity>>(emptyList()) }
+    // null until Room answers. The empty list it used to start on showed the removal form for a
+    // moment even with a lock running.
+    var loadedLocks by remember { mutableStateOf<List<BlockedAppEntity>?>(null) }
+    val locks = loadedLocks.orEmpty()
     var isAdminActive by remember { mutableStateOf(DeviceAdminHelper.isAdminActive(context)) }
     var confirmText by remember { mutableStateOf("") }
     var justRemoved by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        app.repository.activeEntities.collectLatest { locks = it }
+        app.repository.activeEntities.collectLatest { loadedLocks = it }
     }
 
     Scaffold(
@@ -99,6 +104,33 @@ fun RemoveProtectionScreen(onDone: () -> Unit) {
                 .padding(horizontal = 16.dp),
         ) {
             when {
+                // Locks first: with admin already off (Safe Mode, say) a running lock still keeps
+                // Accessibility guarded, so the admin-off branch's settings button would only
+                // bounce.
+                locks.isNotEmpty() -> {
+                    StatusCard(
+                        tone  = StatusColors.Warning,
+                        icon  = Icons.Filled.Lock,
+                        title = "You have ${locks.size} active " +
+                            "lock${if (locks.size == 1) "" else "s"}.",
+                        body  = "Protection can't be removed while a lock is running, from here " +
+                            "or from Android's settings. That's the point of it. Wait the locks " +
+                            "out, or use an unlock key, then come back here.",
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    locks.forEach { lock ->
+                        LockLine(lock)
+                    }
+                    Spacer(Modifier.height(16.dp))
+                    OutlinedButton(
+                        onClick  = onDone,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape    = RoundedCornerShape(14.dp),
+                    ) {
+                        Text("Back to app")
+                    }
+                }
+
                 !isAdminActive -> {
                     StatusCard(
                         tone  = StatusColors.Success,
@@ -135,30 +167,6 @@ fun RemoveProtectionScreen(onDone: () -> Unit) {
                     }
                 }
 
-                locks.isNotEmpty() -> {
-                    StatusCard(
-                        tone  = StatusColors.Warning,
-                        icon  = Icons.Filled.Lock,
-                        title = "You have ${locks.size} active " +
-                            "lock${if (locks.size == 1) "" else "s"}.",
-                        body  = "Protection can't be removed while a lock is running — that's " +
-                            "the entire point of it. Wait the locks out, or get in touch if you " +
-                            "need them lifted early, then come back here.",
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    locks.forEach { lock ->
-                        LockLine(lock)
-                    }
-                    Spacer(Modifier.height(16.dp))
-                    OutlinedButton(
-                        onClick  = onDone,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape    = RoundedCornerShape(14.dp),
-                    ) {
-                        Text("Back to app")
-                    }
-                }
-
                 else -> {
                     StatusCard(
                         tone  = StatusColors.Danger,
@@ -180,11 +188,15 @@ fun RemoveProtectionScreen(onDone: () -> Unit) {
                     Spacer(Modifier.height(12.dp))
                     Button(
                         onClick = {
-                            DeviceAdminHelper.removeAdmin(context)
-                            isAdminActive = false
-                            justRemoved = true
+                            // Re-read rather than trusting the list on screen: a lock started
+                            // in another window since it was drawn must still win.
+                            if (app.repository.activeLocks.value.isEmpty()) {
+                                DeviceAdminHelper.removeAdmin(context)
+                                isAdminActive = false
+                                justRemoved = true
+                            }
                         },
-                        enabled  = confirmText == CONFIRM_PHRASE,
+                        enabled  = confirmText == CONFIRM_PHRASE && loadedLocks != null,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(52.dp),

@@ -178,7 +178,7 @@ fun OnboardingScreen(
             },
             onBack = onBack,
             actions = {
-                TextButton(onClick = onRemoveProtection) {
+                TextButton(onClick = withHaptic(onRemoveProtection)) {
                     Text("Remove protection", color = StatusColors.Danger)
                 }
             },
@@ -694,7 +694,7 @@ private fun AccessibilityWalkthrough(
         Spacer(Modifier.height(14.dp))
         PrimaryButton("Open the switch", onTurnOn, Modifier.fillMaxWidth())
         Spacer(Modifier.height(4.dp))
-        TextButton(onClick = { expanded = true }) {
+        TextButton(onClick = withHaptic { expanded = true }) {
             Text("Switch greyed out, or says \"Restricted setting\"?")
         }
         return

@@ -210,6 +210,9 @@ class BlockRepository(
         dao.observePlanDays(from.toString(), to.toString())
 
     /** The plan's scorecard from its first day to [today], re-emitted as either side changes. */
+    /** How many different apps have ever been locked; feeds util/Rewards. */
+    fun observeAppsEverLocked(): Flow<Int> = dao.observeAppsEverLocked()
+
     fun observePlanProgress(plan: ReelPlan.Plan, today: LocalDate): Flow<PlanProgress.Summary> =
         combine(observeReelDays(plan.startDay, today), observePlanDays(plan.startDay, today)) { reels, records ->
             PlanProgress.summarize(plan, today, PlanProgress.days(plan, today, reels, records))

@@ -22,6 +22,8 @@ import android.view.animation.OvershootInterpolator
 import android.widget.FrameLayout
 import android.widget.TextView
 import com.blockapp.android.data.BlockRepository
+import com.blockapp.android.util.ReelSettings
+import com.blockapp.android.util.Rewards
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -73,6 +75,12 @@ internal class ReelBubble(
         private set
 
     fun show(packageName: String) {
+        // Switched off in the Reel engine screen. Only the pill goes: counting and the limit
+        // are the tracker's and the service's, and carry on without it.
+        if (!ReelSettings.pillVisible(service)) {
+            if (root != null) hide()
+            return
+        }
         shownFor = packageName
         if (root == null && !attach()) {
             shownFor = null
@@ -156,7 +164,8 @@ internal class ReelBubble(
             )
             alpha = 0f
         }
-        val anchor = anchor(heightPx)
+        val side = ReelSettings.pillSide(service)
+        val anchor = anchor(heightPx, side)
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -167,7 +176,9 @@ internal class ReelBubble(
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT,
         ).apply {
-            gravity = Gravity.TOP or Gravity.START
+            // From the right edge when left of the camera: the pill's width isn't known until
+            // it is laid out, but its right end belongs a gap short of the camera either way.
+            gravity = Gravity.TOP or if (side == ReelSettings.Side.LEFT) Gravity.END else Gravity.START
             // Display cutouts were introduced in API 28 (P). Without this the window is pushed
             // below the cutout and lands under the status bar instead of beside the camera.
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -204,12 +215,19 @@ internal class ReelBubble(
     private fun render(total: Int) {
         val text = label ?: return
         val limit = limitProvider()
-        val figure = if (limit != null) "$total/$limit" else "$total"
-        text.text = SpannableString("$PLAY_GLYPH $figure").apply {
+        val figure = when {
+            limit == null -> "$total"
+            ReelSettings.pillFormat(service) == ReelSettings.Format.LEFT -> "${(limit - total).coerceAtLeast(0)} left"
+            ReelSettings.pillFormat(service) == ReelSettings.Format.BARE -> "$total"
+            else -> "$total/$limit"
+        }
+        // The glyph is a reward the user picked (util/Rewards); Play until they have one.
+        val glyph = Rewards.glyph(service).text
+        text.text = SpannableString("$glyph $figure").apply {
             setSpan(
                 ForegroundColorSpan(GLYPH_COLOR),
                 0,
-                PLAY_GLYPH.length,
+                glyph.length,
                 Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
             )
         }
@@ -251,9 +269,10 @@ internal class ReelBubble(
      * punch-hole cameras sit, when there is no top cutout, or below API 29, where Display has
      * no getCutout().
      */
-    private fun anchor(heightPx: Int): Point {
+    private fun anchor(heightPx: Int, side: ReelSettings.Side): Point {
         val gap = dp(CAMERA_GAP_DP)
         val screen = service.resources.displayMetrics
+        val left = side == ReelSettings.Side.LEFT
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             // DisplayManager rather than service.display: an accessibility service is not a
             // visual context, and getDisplay() on one throws from API 30.
@@ -264,11 +283,13 @@ internal class ReelBubble(
                 ?.minByOrNull { it.left }
             if (camera != null) {
                 return Point(
-                    camera.right + gap,
+                    // For LEFT this is the distance from the screen's right edge (Gravity.END).
+                    if (left) screen.widthPixels - camera.left + gap else camera.right + gap,
                     (camera.centerY() - heightPx / 2).coerceAtLeast(0),
                 )
             }
         }
+        // The same offset mirrors itself for LEFT, which measures it from the right edge.
         return Point(screen.widthPixels / 2 + dp(FALLBACK_OFFSET_DP), dp(FALLBACK_TOP_DP))
     }
 
@@ -312,12 +333,6 @@ internal class ReelBubble(
 
         /** How long the accent fill takes to fade back after a new reel. */
         const val FLASH_MS = 550L
-
-        /**
-         * U+25B6 plus the text-presentation selector. Bare U+25B6 renders as a colour emoji
-         * on most devices, which is too big and too loud at this size.
-         */
-        const val PLAY_GLYPH = "\u25B6\uFE0E"
 
         /** Graphite at ~88% opacity, so it reads over both a bright video and a dark one. */
         const val BUBBLE_COLOR = 0xE00E0F0C.toInt()

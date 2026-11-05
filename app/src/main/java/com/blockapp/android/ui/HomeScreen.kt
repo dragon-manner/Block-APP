@@ -67,6 +67,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import androidx.compose.material.icons.outlined.EmojiEvents
+import com.blockapp.android.util.Haptics
+import com.blockapp.android.util.Rewards
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
@@ -95,6 +98,7 @@ fun HomeScreen(
     onHistory: (day: LocalDate?) -> Unit,
     onPlan: () -> Unit,
     onFixSetup: () -> Unit,
+    onRewards: () -> Unit,
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as BlockApplication
@@ -193,6 +197,22 @@ fun HomeScreen(
         app.repository.observePlanProgress(running, today).collectLatest { progress = it }
     }
 
+    // Rewards are earned here, where the user lands every day: the plan's numbers and the lock
+    // count feed util/Rewards, and anything new waits on a card until RewardsScreen is opened.
+    var appsLocked by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) {
+        app.repository.observeAppsEverLocked().collectLatest { appsLocked = it }
+    }
+    var unseenRewards by remember { mutableStateOf(Rewards.unseen(context)) }
+    var level by remember { mutableStateOf(Rewards.level(context)) }
+    LaunchedEffect(progress, appsLocked) {
+        val fresh = Rewards.sync(context, Rewards.Stats.from(progress, appsLocked))
+        if (fresh.isNotEmpty()) Haptics.confirm(context)
+        unseenRewards = Rewards.unseen(context)
+        level = Rewards.level(context)
+    }
+    val nickname = remember(today) { Rewards.nickname(context) }
+
     if (editingLimit) {
         ReelLimitDialog(
             onDismiss = { editingLimit = false },
@@ -213,7 +233,22 @@ fun HomeScreen(
             contentPadding = PaddingValues(start = ScreenPadding, end = ScreenPadding, bottom = 24.dp),
         ) {
             item(key = "header") {
-                Reveal(0) { Header(today = today, isProtected = isProtected, onFixSetup = onFixSetup) }
+                Reveal(0) {
+                    Header(
+                        today = today,
+                        isProtected = isProtected,
+                        onFixSetup = onFixSetup,
+                        nickname = nickname,
+                        level = level,
+                        onLevel = onRewards,
+                    )
+                }
+            }
+            if (unseenRewards.isNotEmpty()) {
+                item(key = "unlock") {
+                    Reveal(1) { NewUnlockCard(unseenRewards, onOpen = onRewards) }
+                    Spacer(Modifier.height(12.dp))
+                }
             }
             if (!isProtected) {
                 item(key = "setup") {
@@ -320,7 +355,14 @@ fun HomeScreen(
 }
 
 @Composable
-private fun Header(today: LocalDate, isProtected: Boolean, onFixSetup: () -> Unit) {
+private fun Header(
+    today: LocalDate,
+    isProtected: Boolean,
+    onFixSetup: () -> Unit,
+    nickname: String?,
+    level: Rewards.Level,
+    onLevel: () -> Unit,
+) {
     val date = remember(today) { today.format(DateTimeFormatter.ofPattern("EEEE, d MMM", Locale.getDefault())) }
     Row(
         Modifier
@@ -331,12 +373,69 @@ private fun Header(today: LocalDate, isProtected: Boolean, onFixSetup: () -> Uni
         Column(Modifier.weight(1f)) {
             Eyebrow(date)
             Spacer(Modifier.height(4.dp))
-            Text(greeting(), style = MaterialTheme.typography.headlineLarge)
+            Text(
+                nickname?.let { "${greeting()}, $it" } ?: greeting(),
+                style = MaterialTheme.typography.headlineLarge,
+            )
+            Spacer(Modifier.height(8.dp))
+            LevelChip(level, onClick = onLevel)
         }
         if (isProtected) {
             StatusPill("Protected", MaterialTheme.colorScheme.primary, live = true)
         } else {
             StatusPill("Off", StatusColors.Danger, onClick = onFixSetup)
+        }
+    }
+}
+
+/** The user's level, one tap from RewardsScreen. A finite bar, nothing looping (Motion.kt). */
+@Composable
+private fun LevelChip(level: Rewards.Level, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .clickable(onClickLabel = "Rewards", onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "Lv ${level.index + 1}",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(level.title, style = MaterialTheme.typography.labelLarge)
+        Spacer(Modifier.width(10.dp))
+        Box(Modifier.width(36.dp)) {
+            Meter(level.fraction, MaterialTheme.colorScheme.primary, height = 4.dp)
+        }
+    }
+}
+
+/** Something new was earned since RewardsScreen was last opened. Opening it clears this. */
+@Composable
+private fun NewUnlockCard(rewards: List<Rewards.Reward>, onOpen: () -> Unit) {
+    Panel(color = MaterialTheme.colorScheme.primaryContainer, onClick = onOpen) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconTile(
+                Icons.Outlined.EmojiEvents,
+                tint = MaterialTheme.colorScheme.onPrimary,
+                background = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    if (rewards.size == 1) "New unlock" else "${rewards.size} new unlocks",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+                Text(
+                    rewards.joinToString(" · ") { it.title } + ". Tap to make it yours.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
         }
     }
 }

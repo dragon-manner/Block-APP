@@ -163,11 +163,14 @@ private fun AppList(
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
             ) {
                 items(filtered, key = { it.packageName }) { launchable ->
-                    AppRow(
-                        launchable = launchable,
-                        isLocked   = launchable.packageName in activeLocks,
-                        onClick    = { onSelect(launchable) },
-                    )
+                    // Rows glide into place as the search narrows the list instead of jumping.
+                    Box(Modifier.animateItem()) {
+                        AppRow(
+                            launchable = launchable,
+                            isLocked   = launchable.packageName in activeLocks,
+                            onClick    = { onSelect(launchable) },
+                        )
+                    }
                 }
             }
         }
@@ -347,10 +350,10 @@ private fun ConfirmLockDialog(
             )
         },
         confirmButton    = {
-            TextButton(onClick = onConfirm) {
+            TextButton(onClick = withHaptic(onConfirm)) {
                 Text(if (isExtending) "Extend" else "Lock it", fontWeight = FontWeight.Bold)
             }
         },
-        dismissButton    = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton    = { TextButton(onClick = withHaptic(onDismiss)) { Text("Cancel") } },
     )
 }

@@ -1,6 +1,13 @@
 package com.blockapp.android.ui
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
@@ -44,9 +51,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -92,15 +97,28 @@ internal fun outcomeLabel(outcome: PlanProgress.Outcome): String = when (outcome
 internal fun DayStrip(days: List<PlanProgress.Day>, modifier: Modifier = Modifier, count: Int = 14) {
     val shown = days.takeLast(count)
     val padded = List(count - shown.size) { null } + shown
+    val appeared = rememberStaggeredAppear(count, DAY_POP_STAGGER_MS)
     Column(modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            padded.forEach { day ->
+            padded.forEachIndexed { index, day ->
                 val fill = day?.let { outcomeColor(it.outcome) } ?: Color.Transparent
                 val isToday = day?.outcome == PlanProgress.Outcome.TODAY
+                // Cells pop in left to right, oldest first, so the streak builds toward today.
+                // A finite spring on a layer, which the Motion.kt rule allows.
+                val pop by animateFloatAsState(
+                    if (index < appeared) 1f else 0f,
+                    spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium),
+                    label = "dayPop",
+                )
                 Box(
                     Modifier
                         .weight(1f)
                         .height(26.dp)
+                        .graphicsLayer {
+                            alpha = pop.coerceIn(0f, 1f)
+                            scaleX = 0.4f + 0.6f * pop
+                            scaleY = 0.4f + 0.6f * pop
+                        }
                         .clip(RoundedCornerShape(7.dp))
                         .background(if (day == null) MaterialTheme.colorScheme.surfaceContainerLow else fill)
                         .then(
@@ -176,11 +194,27 @@ internal fun JourneyChart(
     chartHeight: Dp = 132.dp,
 ) {
     val max = maxOf(baseline, weeks.maxOfOrNull { maxOf(it.scheduled, it.average ?: 0) } ?: 0, 1)
-    val grow by animateFloatAsState(
-        if (rememberAppeared()) 1f else 0f,
-        tween(JOURNEY_GROW_MS, easing = FastOutSlowInEasing),
-        label = "journey",
-    )
+    // Bars rise one after another, left to right, then each week's dot drops in once its bar
+    // is up, so the chart reads as the plan stepping down rather than appearing whole.
+    val appeared = rememberAppeared()
+    val bars = weeks.indices.map { index ->
+        animateFloatAsState(
+            if (appeared) 1f else 0f,
+            tween(JOURNEY_GROW_MS, delayMillis = if (appeared) index * JOURNEY_STAGGER_MS else 0, easing = FastOutSlowInEasing),
+            label = "journeyBar",
+        )
+    }
+    val dots = weeks.indices.map { index ->
+        animateFloatAsState(
+            if (appeared) 1f else 0f,
+            tween(
+                DOT_POP_MS,
+                delayMillis = if (appeared) index * JOURNEY_STAGGER_MS + JOURNEY_GROW_MS * 3 / 4 else 0,
+                easing = BackOutEasing,
+            ),
+            label = "journeyDot",
+        )
+    }
     val track = MaterialTheme.colorScheme.surfaceContainerHigh
     val line = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
     val dot = MaterialTheme.colorScheme.onSurface
@@ -202,6 +236,7 @@ internal fun JourneyChart(
                 pathEffect = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 5.dp.toPx())),
             )
             weeks.forEachIndexed { index, week ->
+                val grow = bars[index].value
                 val left = index * slot + (slot - barWidth) / 2f
                 val h = (size.height * week.scheduled / max.toFloat() * grow).coerceAtLeast(3.dp.toPx())
                 val color = when {
@@ -216,10 +251,14 @@ internal fun JourneyChart(
                     cornerRadius = CornerRadius(8.dp.toPx(), 8.dp.toPx()),
                 )
                 week.average?.let { avg ->
-                    val y = size.height - (size.height * avg / max.toFloat() * grow)
+                    // The dot waits for its bar, then lands with a small overshoot.
+                    val pop = dots[index].value
+                    if (pop <= 0f) return@let
+                    val y = size.height - (size.height * avg / max.toFloat())
                     val center = Offset(left + barWidth / 2f, y.coerceIn(4.dp.toPx(), size.height - 4.dp.toPx()))
-                    drawCircle(color = if (avg > week.scheduled) Ember else dot, radius = 4.5.dp.toPx(), center = center)
-                    drawCircle(color = track, radius = 4.5.dp.toPx(), center = center, style = Stroke(1.5.dp.toPx()))
+                    val r = 4.5.dp.toPx() * pop
+                    drawCircle(color = if (avg > week.scheduled) Ember else dot, radius = r, center = center)
+                    drawCircle(color = track, radius = r, center = center, style = Stroke(1.5.dp.toPx()))
                 }
             }
         }
@@ -255,6 +294,11 @@ internal fun MilestoneTile(milestone: PlanProgress.Milestone, icon: ImageVector,
         tween(JOURNEY_GROW_MS, easing = FastOutSlowInEasing),
         label = "milestone",
     )
+    val badge by animateFloatAsState(
+        if (rememberAppeared()) 1f else 0.3f,
+        spring(dampingRatio = 0.45f, stiffness = Spring.StiffnessMediumLow),
+        label = "badge",
+    )
     Row(
         modifier
             .clip(RoundedCornerShape(16.dp))
@@ -268,7 +312,8 @@ internal fun MilestoneTile(milestone: PlanProgress.Milestone, icon: ImageVector,
                 val inset = stroke / 2f
                 val arc = Size(size.width - stroke, size.height - stroke)
                 if (reached) {
-                    drawCircle(Lime)
+                    // Grows out of the centre with a slight overshoot as the tile arrives.
+                    drawCircle(Lime, radius = size.minDimension / 2f * badge)
                 } else {
                     drawArc(track, 0f, 360f, false, Offset(inset, inset), arc, style = Stroke(stroke))
                     drawArc(Lime, -90f, 360f * progress, false, Offset(inset, inset), arc, style = Stroke(stroke))
@@ -335,8 +380,8 @@ private fun TimeStepper(label: String, minute: Int, onChange: (Int) -> Unit) {
             modifier = Modifier.weight(1f),
             textAlign = TextAlign.Center,
         )
-        IconButton(onClick = { shift(-STEP_MINUTES) }) { Icon(Icons.Outlined.Remove, contentDescription = "Earlier") }
-        IconButton(onClick = { shift(STEP_MINUTES) }) { Icon(Icons.Outlined.Add, contentDescription = "Later") }
+        IconButton(onClick = withHaptic { shift(-STEP_MINUTES) }) { Icon(Icons.Outlined.Remove, contentDescription = "Earlier") }
+        IconButton(onClick = withHaptic { shift(STEP_MINUTES) }) { Icon(Icons.Outlined.Add, contentDescription = "Later") }
     }
 }
 
@@ -349,7 +394,7 @@ private fun TimeStepper(label: String, minute: Int, onChange: (Int) -> Unit) {
 internal fun HoldToConfirmButton(text: String, onConfirm: () -> Unit, modifier: Modifier = Modifier) {
     val fill = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
-    val haptics = LocalHapticFeedback.current
+    val haptics = rememberHaptics()
     val shape = RoundedCornerShape(50)
     Box(
         modifier
@@ -361,10 +406,17 @@ internal fun HoldToConfirmButton(text: String, onConfirm: () -> Unit, modifier: 
             .pointerInput(Unit) {
                 detectTapGestures(
                     onPress = {
-                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        haptics.tick()
                         val job = scope.launch {
-                            fill.animateTo(1f, tween((HOLD_MS * (1f - fill.value)).toInt(), easing = LinearEasing))
-                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            // Ticks as the fill passes each step, so the hold is felt
+                            // charging up, then the double click of the commit lands on top.
+                            var step = (fill.value * HOLD_TICKS).toInt()
+                            fill.animateTo(1f, tween((HOLD_MS * (1f - fill.value)).toInt(), easing = LinearEasing)) {
+                                val now = (value * HOLD_TICKS).toInt()
+                                if (now > step && now < HOLD_TICKS) haptics.tick()
+                                step = now
+                            }
+                            haptics.confirm()
                             onConfirm()
                         }
                         val released = tryAwaitRelease()
@@ -398,16 +450,69 @@ internal fun HoldToConfirmButton(text: String, onConfirm: () -> Unit, modifier: 
 /** A tappable chip that toggles, for multi-pick lists like the user's alternatives. */
 @Composable
 internal fun ToggleChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    Text(
-        label,
-        style = MaterialTheme.typography.labelLarge,
-        color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-        modifier = Modifier
-            .clip(RoundedCornerShape(50))
-            .background(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 9.dp),
+    val interaction = remember { MutableInteractionSource() }
+    val scale = rememberPressScale(interaction, pressedScale = 0.92f)
+    val fill by animateColorAsState(
+        if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
+        tween(CHIP_FADE_MS),
+        label = "chipFill",
     )
+    val ink by animateColorAsState(
+        if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+        tween(CHIP_FADE_MS),
+        label = "chipInk",
+    )
+    Row(
+        Modifier
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(RoundedCornerShape(50))
+            .background(fill)
+            .clickable(interaction, LocalIndication.current, onClick = onClick)
+            .animateContentSize(spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessMedium))
+            .padding(horizontal = 14.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (selected) {
+            Icon(Icons.Filled.Check, contentDescription = null, tint = ink, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(6.dp))
+        }
+        Text(label, style = MaterialTheme.typography.labelLarge, color = ink)
+    }
+}
+
+/** A short horizontal key under a [JourneyChart]: what a bar, a dot and the dashed line are. */
+@Composable
+internal fun JourneyLegend(modifier: Modifier = Modifier) {
+    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        LegendDot(Lime, "Week's limit")
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(9.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(MaterialTheme.colorScheme.onSurface),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text("You", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            val line = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+            Canvas(Modifier.size(width = 16.dp, height = 9.dp)) {
+                drawLine(
+                    line,
+                    Offset(0f, size.height / 2f),
+                    Offset(size.width, size.height / 2f),
+                    strokeWidth = 1.5.dp.toPx(),
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(3.dp.toPx(), 2.dp.toPx())),
+                )
+            }
+            Spacer(Modifier.width(6.dp))
+            Text("Start", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
 }
 
 private const val MINUTES_PER_DAY = 24 * 60
@@ -415,5 +520,16 @@ private const val STEP_MINUTES = 30
 
 /** Long enough to be a decision, short enough not to feel like a chore. */
 private const val HOLD_MS = 1_400
+
+/** Ticks felt across one full hold. More than ~8 in 1.4s blurs into a buzz on a Pixel. */
+private const val HOLD_TICKS = 7
 private const val DRAIN_MS = 250
-private const val JOURNEY_GROW_MS = 900
+private const val JOURNEY_GROW_MS = 700
+
+/** Delay between neighbouring week bars starting to rise. */
+private const val JOURNEY_STAGGER_MS = 70
+
+/** Delay between neighbouring day cells popping in: the 14 cells land in about half a second. */
+private const val DAY_POP_STAGGER_MS = 30L
+private const val CHIP_FADE_MS = 160
+private const val DOT_POP_MS = 380

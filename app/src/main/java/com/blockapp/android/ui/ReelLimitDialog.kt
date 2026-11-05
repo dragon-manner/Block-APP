@@ -131,7 +131,7 @@ internal fun ReelLimitDialog(onDismiss: () -> Unit, onDone: () -> Unit) {
         confirmButton = {
             TextButton(
                 enabled = valid,
-                onClick = {
+                onClick = withHaptic {
                     val message = when (ReelLimit.set(context, chosen)) {
                         ReelLimit.Change.APPLIED_NOW ->
                             if (chosen == 0) "Reels are off from now on" else "Limit is now $chosen reels a day"
@@ -144,7 +144,7 @@ internal fun ReelLimitDialog(onDismiss: () -> Unit, onDone: () -> Unit) {
                 },
             ) { Text("Save", fontWeight = FontWeight.Bold) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = withHaptic(onDismiss)) { Text("Cancel") } },
     )
 }
 

@@ -239,7 +239,7 @@ fun HistoryScreen(
         }
 
         if (reelApps.isNotEmpty()) {
-            item(key = "reel-apps") {
+            animatedItem(key = "reel-apps") {
                 Column {
                     SectionHeader("Reels by app")
                     ReelBreakdown(reelApps)
@@ -247,7 +247,7 @@ fun HistoryScreen(
             }
         }
 
-        item(key = "apps") {
+        animatedItem(key = "apps") {
             Column {
                 SectionHeader(if (span == Span.Day) "Apps" else "Top apps")
                 val list = apps
@@ -292,7 +292,7 @@ private fun LazyListScope.monthContent(
     today: LocalDate,
     onPickDay: (LocalDate) -> Unit,
 ) {
-    item(key = "month-calendar") {
+    animatedItem(key = "month-calendar") {
         val color = if (metric == Metric.Reels) Ember else Lime
         Panel {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -340,7 +340,7 @@ private fun LazyListScope.monthContent(
             )
         }
     }
-    item(key = "month-summary") {
+    animatedItem(key = "month-summary") {
         val reels = reelDays.values.sumOf { it.reels }
         val screen = usageDays.values.sumOf { it.totalMs }
         val trackedDays = daysTracked(month.atDay(1), month.atEndOfMonth(), firstDay, today)
@@ -370,7 +370,7 @@ private fun LazyListScope.weekContent(
     val days = List(7) { start.plusDays(it.toLong()) }
     val labels = days.map { it.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.getDefault()) }
     val highlight = days.indexOf(today).takeIf { it >= 0 }
-    item(key = "week-charts") {
+    animatedItem(key = "week-charts") {
         Column {
             Panel {
                 val reels = days.map { (reelDays[it]?.reels ?: 0).toLong() }
@@ -427,7 +427,7 @@ private fun LazyListScope.dayContent(
     usage: UsageDayEntity?,
     reels: ReelDayTotal?,
 ) {
-    item(key = "day-top") {
+    animatedItem(key = "day-top") {
         Column {
             Panel {
                 Row(verticalAlignment = Alignment.Bottom) {
@@ -576,7 +576,7 @@ private fun PeriodStepper(
             .padding(vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(onClick = onBack, enabled = canBack) {
+        IconButton(onClick = withHaptic(onBack), enabled = canBack) {
             Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Earlier")
         }
         // The label slides the way the user is moving through time.
@@ -597,7 +597,7 @@ private fun PeriodStepper(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
-        IconButton(onClick = onForward, enabled = canForward) {
+        IconButton(onClick = withHaptic(onForward), enabled = canForward) {
             Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Later")
         }
     }

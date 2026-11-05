@@ -43,6 +43,8 @@ import androidx.compose.material.icons.outlined.HourglassBottom
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Insights
 import androidx.compose.material.icons.outlined.Inventory2
+import androidx.compose.material.icons.outlined.EmojiEvents
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -67,6 +69,14 @@ import com.blockapp.android.admin.DeviceAdminHelper
 import com.blockapp.android.ui.theme.StatusColors
 import com.blockapp.android.usage.UsageStatsProvider
 import com.blockapp.android.util.CrashLog
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.material.icons.outlined.Vibration
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.ripple
+import androidx.compose.ui.semantics.Role
+import com.blockapp.android.util.Haptics
 import com.blockapp.android.util.ReelLimit
 import com.blockapp.android.util.ReelPlan
 
@@ -88,6 +98,8 @@ fun SettingsScreen(
     onPlan: () -> Unit,
     onEnterKey: () -> Unit,
     onRemoveProtection: () -> Unit,
+    onReelEngine: () -> Unit,
+    onRewards: () -> Unit,
 ) {
     val context = LocalContext.current
 
@@ -160,12 +172,14 @@ fun SettingsScreen(
             modifier = Modifier.padding(top = 20.dp, bottom = 16.dp),
         )
 
-        ProtectionSummaryCard(
-            isArmed               = isArmed,
-            protection            = protection,
-            extras                = extras,
-            onOpenSetup           = onPermissions,
-        )
+        Reveal(0) {
+            ProtectionSummaryCard(
+                isArmed               = isArmed,
+                protection            = protection,
+                extras                = extras,
+                onOpenSetup           = onPermissions,
+            )
+        }
 
         crashReport?.let { report ->
             Spacer(Modifier.height(12.dp))
@@ -178,7 +192,24 @@ fun SettingsScreen(
             )
         }
 
-        SettingsSection("Tools") {
+        SettingsSection("Yours", reveal = 1) {
+            val level = remember { com.blockapp.android.util.Rewards.level(context) }
+            SettingsRow(
+                icon     = Icons.Outlined.EmojiEvents,
+                title    = "Make it yours",
+                subtitle = "Level ${level.index + 1} · ${level.title} · accents, pill glyphs, your wall line",
+                onClick  = onRewards,
+            )
+            RowDivider()
+            SettingsRow(
+                icon     = Icons.Outlined.Tune,
+                title    = "Reel engine",
+                subtitle = "Counted apps, the floating counter, the heads-up",
+                onClick  = onReelEngine,
+            )
+        }
+
+        SettingsSection("Tools", reveal = 1) {
             SettingsRow(
                 icon      = Icons.Outlined.Insights,
                 title     = "Reel plan",
@@ -222,7 +253,11 @@ fun SettingsScreen(
             )
         }
 
-        SettingsSection("Installing & updating") {
+        SettingsSection("Feel", reveal = 2) {
+            VibrationRow()
+        }
+
+        SettingsSection("Installing & updating", reveal = 3) {
             SettingsRow(
                 icon     = Icons.Outlined.Inventory2,
                 title    = "Sideload notes",
@@ -243,7 +278,7 @@ fun SettingsScreen(
             SettingsRow(
                 icon      = Icons.AutoMirrored.Filled.Logout,
                 title     = "Remove protection",
-                subtitle  = "Deactivate Device Admin so the app can be uninstalled",
+                subtitle  = "Deactivate Device Admin so the app can be uninstalled. Not while a lock runs.",
                 titleTint = StatusColors.Danger,
                 onClick   = onRemoveProtection,
             )
@@ -412,11 +447,19 @@ private fun CrashReportCard(report: String, onDismiss: () -> Unit) {
 
 // ── sections & rows ────────────────────────────────────────────────────────────
 @Composable
-private fun SettingsSection(title: String, content: @Composable () -> Unit) {
-    Column(Modifier.padding(top = 24.dp)) {
-        Eyebrow(title, modifier = Modifier.padding(start = 4.dp, bottom = 10.dp))
-        Panel(contentPadding = PaddingValues(0.dp)) { content() }
+/**
+ * [reveal] staggers the section in on arrival like the other tabs' cards. "Protection" passes
+ * none on purpose: it carries Remove protection (invariant 1), and that row is never drawn
+ * through an animation that could leave it faded.
+ */
+private fun SettingsSection(title: String, reveal: Int? = null, content: @Composable () -> Unit) {
+    val section = @Composable {
+        Column(Modifier.padding(top = 24.dp)) {
+            Eyebrow(title, modifier = Modifier.padding(start = 4.dp, bottom = 10.dp))
+            Panel(contentPadding = PaddingValues(0.dp)) { content() }
+        }
     }
+    if (reveal != null) Reveal(reveal) { section() } else section()
 }
 
 @Composable
@@ -462,6 +505,59 @@ private fun SettingsRow(
             )
         }
         Icon(trailing, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/**
+ * The in-app vibration switch (util/Haptics). The row toggles itself rather than relying on the
+ * theme's tap buzz: that fires on release, which can land after the switch has already muted it,
+ * so turning vibration back on would feel like nothing happened.
+ */
+@Composable
+private fun VibrationRow() {
+    val context = LocalContext.current
+    var enabled by remember { mutableStateOf(Haptics.isEnabled(context)) }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .toggleable(
+                value = enabled,
+                interactionSource = remember { MutableInteractionSource() },
+                indication = ripple(),
+                role = Role.Switch,
+            ) { on ->
+                if (on) {
+                    Haptics.setEnabled(context, true)
+                    Haptics.confirm(context)
+                } else {
+                    Haptics.tick(context)
+                    Haptics.setEnabled(context, false)
+                }
+                enabled = on
+            }
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconTile(
+            Icons.Outlined.Vibration,
+            tint       = MaterialTheme.colorScheme.onSurface,
+            background = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+        )
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Vibration", style = MaterialTheme.typography.titleSmall)
+            Text(
+                if (enabled) "Every tap, the hold to commit, and the block wall" else "Off in this app",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Switch(
+            checked = enabled,
+            onCheckedChange = null,
+            colors = SwitchDefaults.colors(checkedTrackColor = MaterialTheme.colorScheme.primary),
+        )
     }
 }
 

@@ -23,6 +23,8 @@ import com.blockapp.android.util.ProtectedPackages
 import com.blockapp.android.util.ReelApps
 import com.blockapp.android.util.ReelLimit
 import com.blockapp.android.util.ReelPlan
+import com.blockapp.android.util.ReelSettings
+import com.blockapp.android.util.Haptics
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,11 +44,19 @@ import java.time.ZoneId
 /**
  * Two-tier protection:
  *
- * Tier 1 – active once Device Admin is active (i.e. setup is complete):
+ * Tier 1 – active once Device Admin is active (i.e. setup is complete), or while a lock runs:
  *   Guards the system screens that could be used to strip this app of its protective
  *   capabilities: Accessibility settings (silently kills this service), Device Admin list/detail
  *   (first step to deactivating admin), and this app's own App Info / uninstall screens.
- *   Also guards the Play Store uninstall flow for this package.
+ *   Also guards the Play Store uninstall flow for this package. See [Guard] for the two levels.
+ *
+ *   Screens are recognised by class name *and* by what they show. Class names alone missed the
+ *   Device Admin screens on a Pixel: Settings opens most pages inside one generic SubSettings
+ *   activity, so "Device admin apps" → this app → Deactivate never matched a hint, and the user
+ *   could switch admin off mid-lock and then the Accessibility switch with it. The content check
+ *   ([settingsWindowIsTamperRoute]) and the [tamperPoll] that repeats it while Settings is in
+ *   front close that, and BlockDeviceAdminReceiver.onDisableRequested backs out of the
+ *   Deactivate confirmation itself through [repelAdminDeactivation].
  *
  *   Gating this on Device Admin being active (rather than running unconditionally) is what
  *   lets first-time setup complete at all: the Accessibility Service has to be turned on
@@ -87,6 +97,28 @@ class AppBlockAccessibilityService : AccessibilityService() {
     private var reelTracker: ReelTracker? = null
     private var reelBubble: ReelBubble? = null
     private var bubbleTransientPackages: Set<String> = emptySet()
+
+    /**
+     * The apps the tracker watches, as the user set them (util/ReelSettings). One live Set
+     * handed to the tracker once, whose contents are swapped underneath it, so a change in the
+     * Reel engine screen applies without rebuilding the tracker mid-session. Volatile because
+     * ReelScreenScanner reads it on its own thread.
+     */
+    private val trackedPackages = object : AbstractSet<String>() {
+        @Volatile var current: Set<String> = ReelApps.KNOWN
+        override val size: Int get() = current.size
+        override fun iterator(): Iterator<String> = current.iterator()
+        override fun contains(element: String): Boolean = element in current
+    }
+
+    /** Held in a field: SharedPreferences keeps its listeners weakly, and a lambda would be collected. */
+    private val reelSettingsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+        refreshTrackedPackages()
+    }
+
+    private fun refreshTrackedPackages() {
+        trackedPackages.current = runCatching { ReelSettings.trackedPackages(this) }.getOrDefault(ReelApps.KNOWN)
+    }
 
     /**
      * Screen-off ends the reel session. Without it the bubble, an accessibility overlay, stays
@@ -168,6 +200,7 @@ class AppBlockAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         ServiceState.markConnected(true)
         val app = application as BlockApplication
+        live = java.lang.ref.WeakReference(this)
         try {
             val currentPackage = rootInActiveWindow?.packageName?.toString()
             if (currentPackage != null) {
@@ -218,12 +251,15 @@ class AppBlockAccessibilityService : AccessibilityService() {
         val bubble = ReelBubble(this, app.repository, scope) { ReelLimit.todayLimit(this) }
         reelBubble = bubble
         bubbleTransientPackages = bubbleTransientPackages()
+        refreshTrackedPackages()
+        ReelSettings.registerListener(this, reelSettingsListener)
         reelTracker = ReelTracker(
             service = this,
             handler = handler,
             // An allowlist, not a blocklist: see ReelApps.KNOWN for the browser images that
-            // were counted as reels when every app was watched.
-            trackedPackages = ReelApps.KNOWN,
+            // were counted as reels when every app was watched. The user can narrow it further
+            // (ReelSettings), but never widen it past KNOWN.
+            trackedPackages = trackedPackages,
             listener = object : ReelTracker.Listener {
                 override fun onReelsWatched(packageName: String, count: Int, watchMs: Long) {
                     app.repository.addReelsWatched(packageName, count, watchMs)
@@ -262,6 +298,8 @@ class AppBlockAccessibilityService : AccessibilityService() {
         // alarm runs cover the rest (see ReelPlan.refresh).
         scope.launch {
             todayTicker().collect {
+                // An app switched off yesterday stops being counted from today.
+                refreshTrackedPackages()
                 try {
                     ReelPlan.refresh(this@AppBlockAccessibilityService, app.repository)
                     // Marks today as one the counter was watching, so a day with no reels
@@ -282,6 +320,7 @@ class AppBlockAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         ServiceState.markConnected(false)
+        if (live.get() === this) live.clear()
         super.onDestroy()
     }
 
@@ -290,12 +329,16 @@ class AppBlockAccessibilityService : AccessibilityService() {
         handler.removeCallbacks(watchdog)
         handler.removeCallbacks(showOverlay)
         handler.removeCallbacks(showReelLimitWall)
+        handler.removeCallbacks(tamperPoll)
+        tamperPollScheduled = false
+        if (live.get() === this) live.clear()
         reelSessionPackage = null
         reelTotalToday = -1
         watchdogScheduled = false
         // The tracker only exists from API 28, but the field's type doesn't say so.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) reelTracker?.release()
         reelTracker = null
+        runCatching { ReelSettings.unregisterListener(this, reelSettingsListener) }
         reelBubble?.hide(immediate = true)
         reelBubble = null
         if (screenOffRegistered) {
@@ -345,15 +388,15 @@ class AppBlockAccessibilityService : AccessibilityService() {
         }
 
         // Tier 1: guard our own protective system screens, but only once Device Admin is
-        // active — otherwise this would block the setup flow itself (see class doc above).
-        if (DeviceAdminHelper.isAdminActive(this) && isProtectiveSystemScreen(eventPackage, className)) {
-            performGlobalAction(GLOBAL_ACTION_HOME)
-            Toast.makeText(
-                this,
-                "This setting is protected by ${getString(R.string.app_name)}.",
-                Toast.LENGTH_SHORT,
-            ).show()
-            return
+        // active or a lock is running, and never the admin activation screen before admin is on
+        // — otherwise this would block the setup flow itself (see class doc and [Guard]).
+        val guard = guardMode()
+        if (guard != Guard.OFF) {
+            if (eventPackage in GUARDED_PACKAGES) startTamperPoll()
+            if (isProtectiveSystemScreen(eventPackage, className, guard)) {
+                bounceFromProtectedScreen()
+                return
+            }
         }
 
         // Tier 2: block locked apps (only when a lock is running)
@@ -375,24 +418,48 @@ class AppBlockAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * How much of Tier 1 is armed.
+     *
+     * [Guard.FULL] once Device Admin is active, which is the end of setup. [Guard.LOCKED] while
+     * a lock runs without admin: admin removed from Safe Mode, say, or a lock started before
+     * setup was finished. Without it, admin off meant Tier 1 off, and the Accessibility switch
+     * and uninstall were open mid-lock. LOCKED leaves the Device Admin screens alone, because
+     * activating admin is the one setup step still possible with this service running, and
+     * blocking it would break invariant 2. The Accessibility screens it does guard can't be part
+     * of setup either: this service running proves that switch is already on.
+     */
+    private enum class Guard { OFF, LOCKED, FULL }
+
+    private fun guardMode(): Guard = when {
+        DeviceAdminHelper.isAdminActive(this) -> Guard.FULL
+        (application as BlockApplication).repository.activeLocks.value.isNotEmpty() -> Guard.LOCKED
+        else -> Guard.OFF
+    }
+
+    /**
      * Returns true if [eventPackage]/[className] is a system screen that could be used to
      * uninstall this app or revoke its permissions, regardless of whether a lock is active.
+     * [className] may be empty (the [tamperPoll]), which leaves only the content check.
      */
-    private fun isProtectiveSystemScreen(eventPackage: String, className: String): Boolean {
+    private fun isProtectiveSystemScreen(eventPackage: String, className: String, guard: Guard): Boolean {
+        val full = guard == Guard.FULL
         // --- Settings app ---
         if (eventPackage in ProtectedPackages.SETTINGS) {
             // Accessibility settings — silently kills our service if the user disables it
-            if (ACCESSIBILITY_CLASS_HINTS.any { className.contains(it, ignoreCase = true) }) {
+            if (className.isNotEmpty() && ACCESSIBILITY_CLASS_HINTS.any { className.contains(it, ignoreCase = true) }) {
                 return true
             }
             // Device Admin screens — first step to removing admin, which unblocks uninstall
-            if (DEVICE_ADMIN_CLASS_HINTS.any { className.contains(it, ignoreCase = true) }) {
+            if (full && className.isNotEmpty() && DEVICE_ADMIN_CLASS_HINTS.any { className.contains(it, ignoreCase = true) }) {
                 return true
             }
             // App Info / Uninstall screens — only when *this* app is the target
-            if (APP_INFO_CLASS_HINTS.any { className.contains(it, ignoreCase = true) }) {
-                return currentWindowMentionsSelf()
+            if (className.isNotEmpty() && APP_INFO_CLASS_HINTS.any { className.contains(it, ignoreCase = true) } &&
+                currentWindowMentionsSelf()
+            ) {
+                return true
             }
+            return settingsWindowIsTamperRoute(full)
         }
 
         // --- Package installer (AOSP & OEM variants) ---
@@ -411,6 +478,92 @@ class AppBlockAccessibilityService : AccessibilityService() {
         }
 
         return false
+    }
+
+    /**
+     * The Settings screens that matter, told apart by what they say rather than by activity
+     * name, since most of them share one activity (see the class doc). A screen counts only if
+     * it names this app *and* carries one of the words of a route out: the admin list or its
+     * Deactivate page, this app's Accessibility page, or its App info (Uninstall, Force stop).
+     * Requiring this app's name keeps the rest of Settings usable, including the battery and
+     * overlay pages setup links to, which name the app but none of the words.
+     *
+     * English only. On another system language this falls back to the class-name hints alone.
+     *
+     * With [full] off ([Guard.LOCKED]) the Device Admin pages are let through, since that is
+     * where admin gets switched back on. That page also has an "Uninstall app" button, which is
+     * why the admin words are checked first and end the check.
+     */
+    private fun settingsWindowIsTamperRoute(full: Boolean): Boolean {
+        val root = rootInActiveWindow ?: return false
+        if (root.packageName?.toString() !in ProtectedPackages.SETTINGS) return false
+        if (!root.hasText(getString(R.string.app_name))) return false
+        if (ADMIN_SCREEN_WORDS.any { root.hasText(it) }) return full
+        return ACCESSIBILITY_SCREEN_WORDS.any { root.hasText(it) } ||
+            APP_INFO_SCREEN_WORDS.any { root.hasText(it) }
+    }
+
+    private fun android.view.accessibility.AccessibilityNodeInfo.hasText(text: String): Boolean =
+        findAccessibilityNodeInfosByText(text).isNotEmpty()
+
+    /**
+     * Repeats [isProtectiveSystemScreen] while a Settings, installer or Play Store window is in
+     * front. A Settings page fills its list after the window-state event that announced it, so
+     * the content check on that event alone often saw an empty page. Polling also covers moving
+     * between pages of one SubSettings activity, which fires no window-state event at all.
+     * Content-change events are not used for this (they only ever feed the reel tracker's
+     * throttle), and the poll stops itself the moment none of those apps is in front.
+     */
+    private val tamperPoll = object : Runnable {
+        override fun run() {
+            tamperPollScheduled = false
+            try {
+                val guard = guardMode()
+                if (guard == Guard.OFF) return
+                val pkg = rootInActiveWindow?.packageName?.toString() ?: return
+                if (pkg !in GUARDED_PACKAGES) return
+                if (isProtectiveSystemScreen(pkg, "", guard)) {
+                    bounceFromProtectedScreen()
+                    return
+                }
+                startTamperPoll()
+            } catch (e: RuntimeException) {
+                Log.w(TAG, "tamper poll failed", e)
+            }
+        }
+    }
+    private var tamperPollScheduled = false
+
+    private fun startTamperPoll() {
+        if (tamperPollScheduled) return
+        tamperPollScheduled = true
+        handler.postDelayed(tamperPoll, TAMPER_POLL_MS)
+    }
+
+    private var lastBounceToastAt = 0L
+
+    private fun bounceFromProtectedScreen() {
+        performGlobalAction(GLOBAL_ACTION_HOME)
+        val now = SystemClock.uptimeMillis()
+        // The poll can bounce twice inside one HOME transition; one toast is enough.
+        if (now - lastBounceToastAt < BOUNCE_TOAST_GAP_MS) return
+        lastBounceToastAt = now
+        val locked = (application as BlockApplication).repository.activeLocks.value.isNotEmpty()
+        Toast.makeText(
+            this,
+            if (locked) {
+                "Locked until your timer ends. ${getString(R.string.app_name)} can't be removed mid-lock."
+            } else {
+                "This setting is protected by ${getString(R.string.app_name)}. Use Remove protection in the app."
+            },
+            Toast.LENGTH_SHORT,
+        ).show()
+    }
+
+    /** See the companion's [Companion.repelAdminDeactivation]. */
+    private fun backOutOfAdminDeactivation() {
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        performGlobalAction(GLOBAL_ACTION_HOME)
     }
 
     /**
@@ -473,10 +626,12 @@ class AppBlockAccessibilityService : AccessibilityService() {
         val previous = reelTotalToday
         reelTotalToday = total
         val limit = ReelLimit.todayLimit(this)
-        if (limit != null) {
-            val warnAt = limit - LIMIT_WARNING_REELS
+        val warnBefore = ReelSettings.warnAt(this)
+        if (limit != null && warnBefore > 0) {
+            val warnAt = limit - warnBefore
             if (previous in 0 until warnAt && total in warnAt until limit) {
                 Toast.makeText(this, "${limit - total} reels left today", Toast.LENGTH_SHORT).show()
+                if (ReelSettings.warnBuzz(this)) Haptics.reject(this)
             }
         }
         // Runs with no limit too: reel-free hours apply whether or not a limit is set.
@@ -539,35 +694,80 @@ class AppBlockAccessibilityService : AccessibilityService() {
 
     override fun onInterrupt() {}
 
-    private companion object {
-        const val TAG = "AppBlockService"
+    companion object {
+        private const val TAG = "AppBlockService"
+
+        /**
+         * The connected service, for BlockDeviceAdminReceiver. Weak so a torn-down service is
+         * never kept alive or acted through.
+         */
+        private var live = java.lang.ref.WeakReference<AppBlockAccessibilityService>(null)
+
+        /**
+         * Backs out of Settings' Device Admin "Deactivate" confirmation, from the admin
+         * receiver's onDisableRequested. That callback runs while Settings waits for our warning
+         * text and before it shows the confirm dialog, whichever screen the user came through,
+         * so it holds even where Tier 1 didn't recognise the page. BACK finishes the page so the
+         * dialog never appears; HOME follows in case BACK only closed a sheet. The in-app
+         * removal (RemoveProtectionScreen → removeActiveAdmin) never calls onDisableRequested,
+         * so the sanctioned way out is untouched. Does nothing if the service isn't running,
+         * which is also what keeps a crashed service from stranding anyone. Main thread only.
+         */
+        fun repelAdminDeactivation(): Boolean {
+            val service = live.get() ?: return false
+            return runCatching { service.backOutOfAdminDeactivation() }.isSuccess
+        }
 
         /** How often the watchdog re-checks the foreground app against active locks. */
-        const val WATCHDOG_INTERVAL_MS = 200L
+        private const val WATCHDOG_INTERVAL_MS = 200L
 
         /**
          * Wait between sending a locked app home and showing the block wall. Long enough for
          * the HOME transition to finish (150-450ms in the emulator log), short enough that the
          * wall reads as the cause of the bounce rather than a separate event.
          */
-        const val OVERLAY_DELAY_MS = 350L
+        private const val OVERLAY_DELAY_MS = 350L
 
         /** EXTRA_REEL_LIMIT for a reel-free-hours wall with no daily limit set. */
-        const val NO_LIMIT = -1
-
-        /** How many reels before the limit the "N reels left" warning appears. */
-        const val LIMIT_WARNING_REELS = 10
+        private const val NO_LIMIT = -1
 
         /** Minimum spacing between reel-limit kicks; see enforceReelLimit. */
-        const val LIMIT_KICK_COOLDOWN_MS = 1_500L
+        private const val LIMIT_KICK_COOLDOWN_MS = 1_500L
 
         /** How often the day is re-checked so today's reel total resets at midnight. */
-        const val DAY_CHECK_MS = 60_000L
+        private const val DAY_CHECK_MS = 60_000L
 
-        const val SYSTEM_UI_PACKAGE = "com.android.systemui"
+        private const val SYSTEM_UI_PACKAGE = "com.android.systemui"
+
+        /**
+         * How often [tamperPoll] re-reads a Settings window. Short enough that a Deactivate page
+         * is gone before a deliberate tap lands on it, long enough that walking a Settings
+         * window a few times a second costs nothing noticeable. Only runs while Settings, the
+         * installer or the Play Store is in front.
+         */
+        private const val TAMPER_POLL_MS = 300L
+
+        /** Minimum spacing between "this setting is protected" toasts. */
+        private const val BOUNCE_TOAST_GAP_MS = 2_500L
+
+        /** The apps [tamperPoll] watches; everything Tier 1 can act on. */
+        private val GUARDED_PACKAGES = ProtectedPackages.ALL
+
+        /**
+         * Words on Settings' Device Admin list and its per-app page ("Device admin apps",
+         * "Deactivate this device admin app"). Matched case-insensitively as substrings, and
+         * only together with this app's name; see settingsWindowIsTamperRoute.
+         */
+        private val ADMIN_SCREEN_WORDS = listOf("device admin", "Deactivate", "admin app")
+
+        /** This app's Accessibility page: the list's title, and the per-service shortcut row. */
+        private val ACCESSIBILITY_SCREEN_WORDS = listOf("Accessibility", "shortcut")
+
+        /** This app's App info page, on AOSP, Pixel and One UI alike. */
+        private val APP_INFO_SCREEN_WORDS = listOf("Uninstall", "Force stop")
 
         /** Matches any Accessibility-settings activity across OEMs. */
-        val ACCESSIBILITY_CLASS_HINTS = listOf(
+        private val ACCESSIBILITY_CLASS_HINTS = listOf(
             "AccessibilitySettings",
             "AccessibilityService",
             "ToggleAccessibility",
@@ -576,7 +776,7 @@ class AppBlockAccessibilityService : AccessibilityService() {
         )
 
         /** Matches Device Admin list and detail screens. */
-        val DEVICE_ADMIN_CLASS_HINTS = listOf(
+        private val DEVICE_ADMIN_CLASS_HINTS = listOf(
             "DeviceAdmin",
             "DevicePolicyManager",
             "ActiveAdmin",
@@ -586,7 +786,7 @@ class AppBlockAccessibilityService : AccessibilityService() {
          * Matches App Info / App Details screens.
          * These are shared by all apps, so callers must also check [currentWindowMentionsSelf].
          */
-        val APP_INFO_CLASS_HINTS = listOf(
+        private val APP_INFO_CLASS_HINTS = listOf(
             "InstalledAppDetails",
             "AppInfoDashboard",
             "AppInfoBase",
@@ -600,7 +800,7 @@ class AppBlockAccessibilityService : AccessibilityService() {
         )
 
         /** Matches uninstall confirmation / progress screens in the package installer. */
-        val UNINSTALLER_CLASS_HINTS = listOf(
+        private val UNINSTALLER_CLASS_HINTS = listOf(
             "UninstallerActivity",
             "UninstallAppProgress",
             "UninstallConfirm",
@@ -609,7 +809,7 @@ class AppBlockAccessibilityService : AccessibilityService() {
         )
 
         /** Matches Play Store uninstall confirmation dialogs. */
-        val PLAY_STORE_UNINSTALL_HINTS = listOf(
+        private val PLAY_STORE_UNINSTALL_HINTS = listOf(
             "UninstallActivity",
             "ConfirmUninstall",
             "AppActionDialog",

@@ -173,7 +173,7 @@ fun FocusModeScreen(onBack: () -> Unit, onLocked: (LockedSummary) -> Unit) {
                         style = MaterialTheme.typography.titleLarge,
                         modifier = Modifier.weight(1f),
                     )
-                    TextButton(onClick = { picking = true }) {
+                    TextButton(onClick = withHaptic { picking = true }) {
                         Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(4.dp))
                         Text("Add")
@@ -187,7 +187,7 @@ fun FocusModeScreen(onBack: () -> Unit, onLocked: (LockedSummary) -> Unit) {
                 )
                 if (FocusModeSelection.hasCustomisation(context)) {
                     TextButton(
-                        onClick = {
+                        onClick = withHaptic {
                             FocusModeSelection.resetToSuggested(context)
                             refresh()
                         },
@@ -210,15 +210,19 @@ fun FocusModeScreen(onBack: () -> Unit, onLocked: (LockedSummary) -> Unit) {
             }
         } else {
             items(targets, key = { it.packageName }) { launchable ->
-                FocusAppRow(
-                    launchable = launchable,
-                    isLocked = launchable.packageName in activeLocks,
-                    checked = true,
-                    onToggle = {
-                        FocusModeSelection.exclude(context, launchable.packageName)
-                        refresh()
-                    },
-                )
+                // An unticked app slides out and the rest close the gap, rather than the list
+                // redrawing one row shorter.
+                Box(Modifier.animateItem()) {
+                    FocusAppRow(
+                        launchable = launchable,
+                        isLocked = launchable.packageName in activeLocks,
+                        checked = true,
+                        onToggle = {
+                            FocusModeSelection.exclude(context, launchable.packageName)
+                            refresh()
+                        },
+                    )
+                }
             }
         }
     }
@@ -348,7 +352,7 @@ private fun FocusAppRow(
         }
         Checkbox(
             checked = checked,
-            onCheckedChange = { onToggle() },
+            onCheckedChange = withHapticToggle { onToggle() },
             colors = CheckboxDefaults.colors(
                 checkedColor = MaterialTheme.colorScheme.primary,
                 checkmarkColor = MaterialTheme.colorScheme.onPrimary,
@@ -375,11 +379,11 @@ private fun ConfirmFocusModeDialog(
             )
         },
         confirmButton = {
-            TextButton(onClick = onConfirm) {
+            TextButton(onClick = withHaptic(onConfirm)) {
                 Text("Start", fontWeight = FontWeight.Bold)
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = withHaptic(onDismiss)) { Text("Cancel") } },
     )
 }
 

@@ -265,7 +265,7 @@ private fun QuizTopBar(step: Int, onBack: () -> Unit, onSkip: () -> Unit) {
                 .padding(start = 4.dp, end = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = onBack) {
+            IconButton(onClick = withHaptic(onBack)) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
             }
             Text(
@@ -274,7 +274,7 @@ private fun QuizTopBar(step: Int, onBack: () -> Unit, onSkip: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
-            TextButton(onClick = onSkip) { Text("Skip") }
+            TextButton(onClick = withHaptic(onSkip)) { Text("Skip") }
         }
         // One segment per question, so how much is left is countable rather than a vague bar.
         Row(
@@ -332,7 +332,7 @@ private fun Intro(onStart: () -> Unit, onSkip: () -> Unit) {
         Spacer(Modifier.weight(1f))
         Spacer(Modifier.height(28.dp))
         PrimaryButton("Start", onClick = onStart, modifier = Modifier.fillMaxWidth())
-        TextButton(onClick = onSkip, modifier = Modifier.padding(vertical = 8.dp)) {
+        TextButton(onClick = withHaptic(onSkip), modifier = Modifier.padding(vertical = 8.dp)) {
             Text("Skip for now")
         }
     }
@@ -486,7 +486,7 @@ private fun PlanReveal(
                 }
                 Switch(
                     checked = useQuiet,
-                    onCheckedChange = { useQuiet = it },
+                    onCheckedChange = withHapticToggle { useQuiet = it },
                     colors = SwitchDefaults.colors(checkedTrackColor = MaterialTheme.colorScheme.primary),
                 )
             }
@@ -545,7 +545,7 @@ private fun PlanReveal(
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth(),
         )
-        TextButton(onClick = onSkip, modifier = Modifier.align(Alignment.CenterHorizontally).padding(vertical = 8.dp)) {
+        TextButton(onClick = withHaptic(onSkip), modifier = Modifier.align(Alignment.CenterHorizontally).padding(vertical = 8.dp)) {
             Text("Not now")
         }
         Spacer(Modifier.height(8.dp))

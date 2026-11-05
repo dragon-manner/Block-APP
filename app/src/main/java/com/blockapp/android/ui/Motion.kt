@@ -2,6 +2,7 @@ package com.blockapp.android.ui
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -23,6 +24,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyItemScope
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -96,6 +99,41 @@ internal fun rememberAppeared(): Boolean {
     var appeared by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { appeared = true }
     return appeared
+}
+
+/**
+ * A LazyColumn item that fades in, fades out and glides to its new place when the list around
+ * it changes: History's sections swapping as the span changes, rows coming and going under a
+ * search. Placement only, nothing loops.
+ */
+internal fun LazyListScope.animatedItem(key: Any, content: @Composable LazyItemScope.() -> Unit) {
+    item(key = key) {
+        val scope = this
+        Box(Modifier.animateItem()) { scope.content() }
+    }
+}
+
+/** Overshoots a little past the end and settles back: a "pop" for things landing in place. */
+internal val BackOutEasing = Easing { t ->
+    val x = t - 1f
+    x * x * ((BACK_OUT_TENSION + 1f) * x + BACK_OUT_TENSION) + 1f
+}
+
+/**
+ * How many of [count] siblings have "arrived": climbs from 0 to [count] one every [stepMs]
+ * after first composition. Index `i` animates in once `i < result`, which staggers a row of
+ * small items (the plan's day strip) without a Reveal wrapper and a delay per item.
+ */
+@Composable
+internal fun rememberStaggeredAppear(count: Int, stepMs: Long): Int {
+    var shown by remember { mutableStateOf(0) }
+    LaunchedEffect(count) {
+        while (shown < count) {
+            delay(stepMs)
+            shown++
+        }
+    }
+    return shown
 }
 
 /** An integer that counts up on arrival and rolls to each new value after that. */
@@ -219,3 +257,6 @@ private const val REVEAL_STIFFNESS = 260f
 private const val COUNT_MS = 900
 private const val ROLL_MS = 260
 private const val PULSE_MS = 1_800
+
+/** How far [BackOutEasing] overshoots; 1.7 is the classic "back" curve, about 10% past. */
+private const val BACK_OUT_TENSION = 1.7f

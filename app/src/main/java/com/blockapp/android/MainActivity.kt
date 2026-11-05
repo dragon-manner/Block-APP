@@ -10,6 +10,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -38,6 +40,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -50,6 +53,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,6 +73,8 @@ import com.blockapp.android.ui.LockedSummary
 import com.blockapp.android.ui.OnboardingScreen
 import com.blockapp.android.ui.PlanScreen
 import com.blockapp.android.ui.QuizScreen
+import com.blockapp.android.ui.ReelEngineScreen
+import com.blockapp.android.ui.RewardsScreen
 import com.blockapp.android.ui.RemoveProtectionScreen
 import com.blockapp.android.ui.SettingsScreen
 import com.blockapp.android.ui.UnlockKeyScreen
@@ -88,6 +94,10 @@ private sealed class Screen {
     data object FocusMode : Screen()
     data object UnlockKey : Screen()
     data object RemoveProtection : Screen()
+    data object ReelEngine : Screen()
+
+    /** Opened from Settings or from Home's level chip; [returnTo] is that tab. */
+    data class Rewards(val returnTo: Screen = Settings) : Screen()
 
     /**
      * [packageName] skips straight to the duration step for that app (the lock buttons on
@@ -122,6 +132,8 @@ private fun Screen.parent(): Screen = when (this) {
     is Screen.AppPicker -> returnTo
     Screen.Onboarding -> Screen.Settings
     Screen.RemoveProtection -> Screen.Settings
+    Screen.ReelEngine -> Screen.Settings
+    is Screen.Rewards -> returnTo
 }
 
 class MainActivity : ComponentActivity() {
@@ -231,6 +243,7 @@ private fun AppRoot() {
                     onHistory = { screen = Screen.History(it) },
                     onPlan = { screen = Screen.Plan },
                     onFixSetup = { screen = Screen.Onboarding },
+                    onRewards = { screen = Screen.Rewards(returnTo = Screen.Home) },
                 )
                 is Screen.History -> HistoryScreen(
                     initialDay = target.day,
@@ -247,7 +260,15 @@ private fun AppRoot() {
                     onPlan = { screen = Screen.Plan },
                     onEnterKey = { screen = Screen.UnlockKey },
                     onRemoveProtection = { screen = Screen.RemoveProtection },
+                    onReelEngine = { screen = Screen.ReelEngine },
+                    onRewards = { screen = Screen.Rewards() },
                 )
+                Screen.ReelEngine -> ReelEngineScreen(
+                    onBack = { screen = Screen.Settings },
+                    onPlan = { screen = Screen.Plan },
+                    onRewards = { screen = Screen.Rewards() },
+                )
+                is Screen.Rewards -> RewardsScreen(onBack = { screen = target.returnTo })
                 is Screen.AppPicker -> AppPickerScreen(
                     initialPackage = target.packageName,
                     onBack = { screen = target.returnTo },
@@ -328,6 +349,15 @@ private fun BottomBar(current: Screen, onSelect: (Screen) -> Unit) {
                     else -> "Today" to Icons.Outlined.Today
                 }
                 val selected = current::class == tab::class
+                // The icon of a newly picked tab springs up from small, so the tap lands visibly
+                // as well as being felt (the theme's indication buzzes on release).
+                val bump = remember { Animatable(1f) }
+                LaunchedEffect(selected) {
+                    if (selected) {
+                        bump.snapTo(TAB_BUMP_FROM)
+                        bump.animateTo(1f, spring(dampingRatio = 0.4f, stiffness = Spring.StiffnessMedium))
+                    }
+                }
                 val fill by animateColorAsState(
                     if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
                     tween(TAB_FADE_MS),
@@ -346,7 +376,13 @@ private fun BottomBar(current: Screen, onSelect: (Screen) -> Unit) {
                         icon,
                         contentDescription = if (selected) null else label,
                         tint = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(22.dp),
+                        modifier = Modifier
+                            .size(22.dp)
+                            .graphicsLayer {
+                                scaleX = bump.value
+                                scaleY = bump.value
+                                rotationZ = (1f - bump.value) * TAB_BUMP_TILT
+                            },
                     )
                     if (selected) {
                         Spacer(Modifier.width(8.dp))
@@ -360,3 +396,7 @@ private fun BottomBar(current: Screen, onSelect: (Screen) -> Unit) {
 
 private val BAR_HEIGHT = 68.dp
 private const val TAB_FADE_MS = 180
+
+/** Where a picked tab's icon springs up from, and how far it tilts on the way. */
+private const val TAB_BUMP_FROM = 0.6f
+private const val TAB_BUMP_TILT = -30f

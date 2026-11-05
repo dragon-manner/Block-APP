@@ -22,10 +22,13 @@ internal val Bone = Color(0xFFF1F2EC)
 internal val BoneMuted = Color(0xFF9A9D93)
 internal val BoneFaint = Color(0xFF666A60)
 
-internal val Lime = Color(0xFFC6F432)
+// "Lime" is the accent slot, and Lime itself is only the default. Getters, not values, so the
+// accent the user unlocked and picked (Accent.kt) reaches every screen that names Lime, and so
+// reads during composition or drawing recompose when it changes. A plain val captured it once.
+internal val Lime: Color get() = AccentState.current.main
 /** Text and icons on a Lime fill. Near-black with the accent's hue, so it doesn't read grey. */
-internal val LimeInk = Color(0xFF141A00)
-internal val LimeWash = Color(0xFF263015)
+internal val LimeInk: Color get() = AccentState.current.ink
+internal val LimeWash: Color get() = AccentState.current.wash
 
 internal val Ember = Color(0xFFFF7A3D)
 internal val EmberWash = Color(0xFF3A2216)

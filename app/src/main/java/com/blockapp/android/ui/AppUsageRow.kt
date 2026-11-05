@@ -94,7 +94,7 @@ internal fun AppUsageRow(
         }
         if (onLock != null) {
             Spacer(Modifier.width(4.dp))
-            IconButton(onClick = onLock) {
+            IconButton(onClick = withHaptic(onLock)) {
                 Icon(
                     if (isLocked) Icons.Filled.Lock else Icons.Outlined.Lock,
                     contentDescription = if (isLocked) "Extend lock" else "Lock ${usage.label}",

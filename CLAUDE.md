@@ -110,11 +110,24 @@ may not have populated yet) and `getActiveOnce()` (receivers running before/outs
   Info / uninstall screens, and the Play Store uninstall flow — matched by package
   (`ProtectedPackages`) plus **substring** class-name hints in `isProtectiveSystemScreen`. For
   screens shared by all apps (App Info, uninstaller), `currentWindowMentionsSelf()` further
-  requires that *this* app is the target.
+  requires that *this* app is the target. **Class names alone weren't enough:** a Pixel opens
+  most Settings pages inside one generic `SubSettings` activity, so the user deactivated admin
+  mid-lock from "Device admin apps" and then switched Accessibility off. So Settings windows are
+  also judged by content (`settingsWindowIsTamperRoute`: this app's label *plus* a route word,
+  "device admin"/"Deactivate", "Accessibility"/"shortcut", "Uninstall"/"Force stop"; English
+  only), re-checked by a 300ms `tamperPoll` that runs only while Settings, an installer or the
+  Play Store is in front. And `BlockDeviceAdminReceiver.onDisableRequested` (which Settings calls
+  on a Deactivate tap, before its confirm dialog, and `removeActiveAdmin` never calls) asks the
+  live service to press BACK + HOME (`repelAdminDeactivation`) and, mid-lock, `lockNow()`s.
 
-Tier 1 is gated on Device Admin already being active, and that gate is load-bearing: Accessibility
-must be enabled *before* Device Admin can be activated, so an unconditional Tier 1 would bounce the
-user out of the Device Admin activation screen and make setup impossible to complete.
+Tier 1 has two levels (`Guard`). FULL once Device Admin is active. LOCKED while a lock runs
+without admin (admin removed from Safe Mode, or a lock started before setup finished): it guards
+Accessibility, App info and uninstall but **leaves the Device Admin pages alone**, since
+re-activating admin is the one setup step still possible with the service running. The admin
+gate is load-bearing: Accessibility must be enabled *before* Device Admin can be activated, so an
+unconditional Tier 1 would bounce the user out of the Device Admin activation screen and make
+setup impossible to complete. In LOCKED the admin-word check runs first and ends the check,
+because the activation page also carries an "Uninstall app" button.
 
 **Reel counter (observe-only).** The same service also receives `typeViewScrolled` and
 `typeWindowContentChanged` and hands them to `ReelTracker`, which counts short-form videos (and
@@ -176,7 +189,8 @@ The tracker never acts on the foreground app. The one action reel tracking leads
 in `AppBlockAccessibilityService.enforceReelLimit`: an open reel session gets
 `GLOBAL_ACTION_BACK` plus the reel wall (`BlockOverlayActivity` with `EXTRA_REEL_LIMIT`) when
 today's total has reached the **daily reel limit** (`util/ReelLimit`), or at any count during
-the plan's **reel-free hours** (`EXTRA_QUIET_FROM` set). It only fires on sessions, which never
+the plan's **reel-free hours** (`EXTRA_QUIET_FROM` set). Every wall's fresh create also vibrates (`Haptics.reject`),
+but not on `onNewIntent`, which the watchdog re-delivers every poll. It only fires on sessions, which never
 exist for this app, launchers or `ProtectedPackages`. Lowering the limit applies now; raising or
 removing it is pending until tomorrow, the same "only ever tighten" rule as invariant 4. A limit
 of **0 is real** ("no reels", where the quit plan ends). Only `null`/`OFF` means no limit, so
@@ -198,6 +212,22 @@ would be an in-app off switch. The plan lives in SharedPreferences (`reel_plan`)
 `ReelLimit`, including the user's own reason (`why`, read back on the reel wall) and their
 alternatives. Steps are a geometric curve (each week keeps `Goal.weeklyKeep` of the last), and
 the number of weeks comes from the pace, not a fixed table.
+
+**Reel engine settings** (`util/ReelSettings`, prefs `reel_settings`, `ReelEngineScreen`): which
+of `ReelApps.KNOWN` are counted, the pill's visibility, side (`Gravity.END` for left of camera)
+and wording, and the "reels left" warning distance (0 = off) and buzz. **Switching an app's
+counting off waits until tomorrow; on is immediate**, the same tighten-only rule as `ReelLimit`,
+because an uncounted app can't reach Tier 3. The service hands the tracker one live `Set` whose
+contents it swaps on a prefs listener and at midnight; never widen it past `KNOWN`.
+
+**Rewards** (`util/Rewards`, prefs `rewards`, `RewardsScreen` "Make it yours"): accents, pill
+glyphs, a wall line of the user's own (shown on every wall, and on reel walls without a plan
+reason), a nickname, XP levels, and one easter egg (7 quick taps on the level badge → Mono
+accent). Earned from `PlanProgress.Summary` plus apps ever locked, synced on Home and on the
+screen; **earned stays earned** and the level uses best-ever XP, so a broken streak or rebuilt plan
+never takes anything back. Every reward is cosmetic or adds friction; never add one that loosens.
+The accent lives in `ui/theme/Accent.kt`: `Lime`/`LimeInk`/`LimeWash` in `Color.kt` are
+*getters* over `AccentState.current` (Compose state), so never capture them in a top-level `val`.
 
 **The plan's scorekeeping** is `util/PlanProgress`, pure, over `reel_counts` plus `plan_days`
 (schema v5, `PlanDayEntity`): each day's limit as it stood, how many times Tier 3 closed a viewer
@@ -263,7 +293,10 @@ activity/FGS start limits; nothing is drawn with it.
 
 **The only sanctioned way out** is `RemoveProtectionScreen`, which calls
 `DeviceAdminHelper.removeAdmin()` in-process — an app may always drop its own admin without
-touching Settings UI, so this path never needs the screens Tier 1 blocks.
+touching Settings UI, so this path never needs the screens Tier 1 blocks. **It refuses while any
+lock is running** (checked first, and re-checked against `activeLocks` at the tap): "can't be
+uninstalled mid-lock" is the app's selling point. Mid-lock the exits are the timer, an unlock key,
+or Safe Mode.
 
 **`ProtectedPackages`** (`util/`) is the single source of truth for packages that must never be
 lockable: Settings variants across OEMs, package installers, Play Store. It is enforced twice on
@@ -298,9 +331,10 @@ out in `generate_key.py`.
 
 Ordered by how bad it is to get wrong. The first one can force a factory reset.
 
-1. **The escape hatch must always work.** While Tier 1 is armed, `RemoveProtectionScreen` →
-   `DeviceAdminHelper.removeAdmin()` is the user's *only* way to regain access to Accessibility
-   and Device Admin settings. If a change crashes that screen, hides it, or leaves it unreachable
+1. **The escape hatch must always work once no lock is running.** While Tier 1 is armed and
+   nothing is locked, `RemoveProtectionScreen` → `DeviceAdminHelper.removeAdmin()` is the user's
+   *only* way to regain access to Accessibility and Device Admin settings. (Mid-lock it refuses by
+   design; the lock's own expiry is what reopens it, so every lock must keep expiring.) If a change crashes that screen, hides it, or leaves it unreachable
    from `HomeScreen`, a locked-out user's remaining options are an unlock key from the dev machine
    or Safe Mode. Any change touching `RemoveProtectionScreen`, `MainActivity`'s navigation, or
    `removeAdmin()` must be verified on-device *with Device Admin actually active*.
@@ -390,6 +424,15 @@ restricted settings" item **only appears after the switch has been tried once** 
 switch again. Whether the app is restricted can't be read (system-only API), so
 `likelyRestricted` guesses from `InstallSourceInfo.packageSource` and only picks wording.
 
+**Haptics** all go through `util/Haptics` (vibrator primitives on API 30+, predefined effects
+on 29, one-shots below; never throws; in-app switch under Settings → Feel). Compose's
+`TextHandleMove` was so faint on a Pixel 8 that the app read as not vibrating. `BlockAppTheme`
+installs `ui/Haptic.kt`'s `HapticRipple` as `LocalIndication`, so every default-indication
+`clickable`/`toggleable` buzzes on release with no opt-in. Material3's Button, IconButton,
+TextButton, Switch and Checkbox use `ripple()` directly and bypass it, so their handlers are
+wrapped in `withHaptic` / `withHapticToggle`. Never do both on one clickable (double buzz).
+`RemoveProtectionScreen` and `UnlockKeyScreen` buttons are left unwrapped (see below).
+
 **Motion** lives in `ui/Motion.kt` (`Reveal`, `AnimatedCount`, `RollingText`, `PulsingDot`) and
 `LockedCelebration.kt`. One hard rule: **anything that animates forever must be drawn in a
 `Canvas`, never animated through `size()`, offsets or `graphicsLayer`.** Compose reports every
@@ -437,7 +480,7 @@ versions in the root `build.gradle.kts`.
 
 Don't add without a real need: any DI framework (Hilt/Koin) — `BlockApplication` is the wiring;
 Navigation-Compose — the `sealed class` + `when` (three bottom-bar tabs, Today/History/Settings,
-plus seven sub-screens) is
+plus nine sub-screens) is
 sufficient; WorkManager —
 `AlarmManager` already covers expiry and exact timing matters; any networking, analytics, or crash
 library — see invariant 8; LiveData or RxJava — the codebase is coroutines/Flow throughout.
@@ -477,6 +520,10 @@ than an emulator. Worth walking through for enforcement changes:
 - With Device Admin active, try to reach Settings → Accessibility, the Device Admin list, and this
   app's App Info — each should bounce, and the rest of Settings should stay usable.
 - Confirm `RemoveProtectionScreen` still deactivates admin and returns control.
+- With a lock running: Settings → Security → Device admin apps → App Blocker → Deactivate must
+  bounce (Pixel `SubSettings` included), and so must Accessibility → App Blocker and App info.
+  `RemoveProtectionScreen` must refuse. With no lock, it must still remove admin.
+- Switch an app's counting off in Reel engine: it must keep counting today and stop tomorrow.
 - Apply an unlock key, then apply the same key again — the second attempt must be rejected as
   already used.
 - Upgrade over a v4 install (1.2, not a fresh one): the DB must open at v5 with `plan_days`,

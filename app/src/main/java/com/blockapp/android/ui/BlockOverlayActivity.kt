@@ -62,11 +62,13 @@ import androidx.compose.ui.unit.dp
 import com.blockapp.android.BlockApplication
 import com.blockapp.android.MainActivity
 import com.blockapp.android.ui.theme.BlockAppTheme
+import com.blockapp.android.util.Haptics
 import com.blockapp.android.ui.theme.Ink800
 import com.blockapp.android.ui.theme.Ink950
 import com.blockapp.android.ui.theme.Lime
 import com.blockapp.android.ui.theme.LimeInk
 import com.blockapp.android.util.ReelPlan
+import com.blockapp.android.util.Rewards
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -77,7 +79,7 @@ import kotlinx.coroutines.launch
 // to match the dark window theme set on this activity in the manifest, so there's no flash on
 // launch.
 private val WallBackground = Ink950
-private val WallAccent     = Lime
+private val WallAccent: Color get() = Lime
 private val WallTrack      = Ink800
 
 /**
@@ -118,6 +120,10 @@ class BlockOverlayActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         readExtras(intent)
+        // Felt as well as seen, so a phone face-down on a table still says "that was blocked".
+        // Only on a fresh create: the watchdog re-delivers the wall through onNewIntent while
+        // the app keeps reaching the front, and a buzz every poll would be a punishment.
+        if (savedInstanceState == null) Haptics.reject(this)
 
         // Back would otherwise pop this activity and reveal whatever is beneath it — which, when
         // the launcher animation hasn't settled yet, can be the locked app itself. Going home
@@ -200,7 +206,11 @@ private fun BlockOverlayContent(
     val identity = remember(packageName) {
         if (packageName.isEmpty()) null else loadAppIdentity(context, packageName)
     }
-    val why = remember(isReelWall) { if (isReelWall) ReelPlan.why(context) else null }
+    // The reel wall reads back the plan's reason; any wall falls back to the line the user wrote
+    // for themselves once they earned it (util/Rewards.WALL_LINE).
+    val why = remember(isReelWall) {
+        (if (isReelWall) ReelPlan.why(context) else null) ?: Rewards.wallLine(context)
+    }
     val alternatives = remember(isReelWall) {
         if (isReelWall) ReelPlan.alternatives(context) else emptyList()
     }
@@ -391,7 +401,7 @@ private fun BlockOverlayContent(
 
         // The reel wall reads the user's own reason back, and what they said they'd rather do:
         // at the moment of the urge, their words land harder than any copy of ours.
-        if (isReelLimit && why != null) {
+        if (why != null) {
             Text(
                 "“$why”",
                 style = MaterialTheme.typography.headlineSmall,
@@ -434,7 +444,7 @@ private fun BlockOverlayContent(
 
         // ── actions ───────────────────────────────────────────────────────
         Button(
-            onClick  = onGoHome,
+            onClick = withHaptic(onGoHome),
             modifier = Modifier
                 .fillMaxWidth()
                 .height(56.dp),
@@ -446,7 +456,7 @@ private fun BlockOverlayContent(
         ) {
             Text("Go home", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
         }
-        TextButton(onClick = onOpenApp, modifier = Modifier.fillMaxWidth()) {
+        TextButton(onClick = withHaptic(onOpenApp), modifier = Modifier.fillMaxWidth()) {
             Text("Open App Blocker", color = Color.White.copy(alpha = 0.7f))
         }
     }

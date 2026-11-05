@@ -60,10 +60,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -183,7 +181,7 @@ internal fun ScreenHeader(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (onBack != null) {
-                IconButton(onClick = onBack) {
+                IconButton(onClick = withHaptic(onBack)) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                 }
             }
@@ -221,12 +219,8 @@ internal fun PrimaryButton(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val scale = rememberPressScale(interaction, pressedScale = 0.95f)
-    val haptics = LocalHapticFeedback.current
     Button(
-        onClick = {
-            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-            onClick()
-        },
+        onClick = withHaptic(onClick),
         enabled = enabled,
         interactionSource = interaction,
         modifier = modifier
@@ -410,6 +404,7 @@ internal fun BarChart(
     }
     val track = MaterialTheme.colorScheme.surfaceContainerHigh
     val dim = color.copy(alpha = 0.35f)
+    val haptics = rememberHaptics()
     Column(modifier.fillMaxWidth()) {
         Canvas(
             Modifier
@@ -420,6 +415,7 @@ internal fun BarChart(
                         Modifier.pointerInput(values.size) {
                             detectTapGestures { offset ->
                                 val slot = size.width / values.size.toFloat()
+                                haptics.tick()
                                 onSelect((offset.x / slot).toInt().coerceIn(0, values.lastIndex))
                             }
                         }
@@ -674,7 +670,6 @@ internal fun ChoiceCard(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val scale = rememberPressScale(interaction, pressedScale = 0.97f)
-    val haptics = LocalHapticFeedback.current
     val shape = RoundedCornerShape(16.dp)
     // The fill and edge fade between states rather than snapping, so a tap reads as the card
     // being chosen, not the screen redrawing.
@@ -698,10 +693,8 @@ internal fun ChoiceCard(
             .clip(shape)
             .background(fill)
             .border(if (selected) 1.5.dp else 1.dp, edge, shape)
-            .clickable(interaction, LocalIndication.current) {
-                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                onClick()
-            }
+            // The theme's indication buzzes on release; see ui/Haptic.kt.
+            .clickable(interaction, LocalIndication.current, onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

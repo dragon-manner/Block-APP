@@ -7,6 +7,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Tap and wall haptics (util/Haptics). A normal permission, granted at install. Without
+         it every vibrate() call throws a SecurityException, which Haptics swallows, so the app
+         would silently never vibrate. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <!-- Needed for AlarmScheduler's setExactAndAllowWhileIdle: on API 33+ this is not granted
          at install time, and calling that API without it throws a SecurityException, which
          would silently break auto-expiry of a lock at its scheduled time. -->

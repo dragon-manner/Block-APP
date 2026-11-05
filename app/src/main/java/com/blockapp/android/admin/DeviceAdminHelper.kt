@@ -65,9 +65,19 @@ object DeviceAdminHelper {
      * Admin / Accessibility system screens (see AppBlockAccessibilityService's Tier 1 doc).
      */
     fun removeAdmin(context: Context) {
+        removedInAppAt = android.os.SystemClock.elapsedRealtime()
         val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
         dpm.removeActiveAdmin(adminComponent(context))
     }
+
+    /**
+     * When [removeAdmin] last ran. BlockDeviceAdminReceiver.onDisabled reads it to leave the
+     * user on RemoveProtectionScreen: relaunching MainActivity there recreated it and dropped
+     * them on setup, one step short of the Accessibility button they came for.
+     */
+    @Volatile
+    var removedInAppAt = 0L
+        private set
 
     /** The three states the Accessibility step can be in. See ServiceState for why it's three. */
     enum class AccessibilityState {

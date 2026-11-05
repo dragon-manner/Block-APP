@@ -39,8 +39,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.coroutineScope
@@ -67,7 +65,7 @@ data class LockedSummary(
  */
 @Composable
 internal fun LockedCelebration(summary: LockedSummary, onFinished: () -> Unit) {
-    val haptics = LocalHapticFeedback.current
+    val haptics = rememberHaptics()
     val scrim = remember { Animatable(0f) }
     val badge = remember { Animatable(0f) }
     val burst = remember { Animatable(0f) }
@@ -80,7 +78,7 @@ internal fun LockedCelebration(summary: LockedSummary, onFinished: () -> Unit) {
             launch { badge.animateTo(1f, spring(dampingRatio = 0.45f, stiffness = Spring.StiffnessMediumLow)) }
             delay(SHUT_DELAY_MS)
             shut = true
-            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            haptics.confirm()
             launch { burst.animateTo(1f, tween(BURST_MS, easing = LinearOutSlowInEasing)) }
             launch { text.animateTo(1f, tween(360, easing = FastOutSlowInEasing)) }
         }

@@ -30,6 +30,10 @@ interface BlockDao {
     @Query("UPDATE blocked_apps SET blockUntil = :newUntil WHERE packageName = :packageName")
     suspend fun updateBlockUntil(packageName: String, newUntil: Long)
 
+    /** Apps ever locked, running or not: rows are soft-deleted, never removed. For util/Rewards. */
+    @Query("SELECT COUNT(*) FROM blocked_apps")
+    fun observeAppsEverLocked(): Flow<Int>
+
     @Query("SELECT COUNT(*) FROM used_nonces WHERE nonce = :nonce")
     suspend fun isNonceUsed(nonce: String): Int
 
