@@ -12,7 +12,7 @@ ui:
 # One catalog and one UI build feed every platform. Copies, not symlinks: go:embed and the
 # Android asset packager both refuse to follow links out of their trees.
 sync: ui
-	rm -rf server/embed/web && mkdir -p server/embed/web && cp -r ui/dist/. server/embed/web/
+	find server/embed/web -mindepth 1 ! -name .gitkeep -delete 2>/dev/null; mkdir -p server/embed/web && touch server/embed/web/.gitkeep && cp -r ui/dist/. server/embed/web/
 	cp shared/catalog.json server/embed/catalog.json
 	rm -rf desktop/dist && mkdir -p desktop/dist && cp -r ui/dist/. desktop/dist/
 	cp shared/catalog.json desktop/src-tauri/catalog.json
