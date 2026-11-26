@@ -85,7 +85,8 @@ jobs:
         with: { name: ui-dist, path: android/app/src/main/assets/ui }
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 21 }
-      - uses: android-actions/setup-android@v3
+      # The runner image ships the Android SDK (ANDROID_HOME); setup-android's own sdkmanager
+      # crashed on it, so it isn't used.
       - name: Build release APK
         run: |
           cp shared/catalog.json android/app/src/main/assets/catalog.json
