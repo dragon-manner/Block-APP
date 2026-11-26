@@ -43,7 +43,7 @@ JS bridge), `ui/` (the native screens left: setup, wall, Remove protection, reel
 make sync                      # build ui/ and copy it + the catalog into every platform
 make server                    # → dist/keel-server (embeds the UI)
 ./dist/keel-server -addr :8080 -db keel.db [-open-signup]
-./deploy/deploy.sh             # build for linux/amd64 and install on the `vps` host
+./deploy/deploy.sh             # build for linux/amd64 and install on root@89.124.4.220
 cd ui && npm run build         # type-check + build the UI
 cd desktop/src-tauri && cargo check / cargo build --release   # needs desktop/dist (make sync)
 cd desktop && npx tauri build  # installers

@@ -59,10 +59,10 @@ phone closes Instagram until the round ends.
 ### 1. Server (once)
 
 ```bash
-./deploy/deploy.sh          # builds, copies to the `vps` ssh host, installs the systemd unit
+./deploy/deploy.sh          # builds, copies to root@89.124.4.220, installs the systemd unit
 ```
 
-It serves HTTPS on `https://144-31-38-244.sslip.io` with an automatic Let's Encrypt
+It serves HTTPS on `https://89-124-4-220.sslip.io` with an automatic Let's Encrypt
 certificate (sslip.io maps the name to the IP, so no domain is needed). The first account to
 register owns the server; later sign-ups are refused unless it runs with `-open-signup`. The
 web dashboard is at the same address.

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Builds keel-server for the VPS and installs it as a systemd service.
-#   ./deploy/deploy.sh            # uses the `vps` host from ~/.ssh/config
+#   ./deploy/deploy.sh            # root@89.124.4.220 (the DataPasa VPS)
 #   HOST=user@1.2.3.4 ./deploy/deploy.sh
 set -euo pipefail
-HOST="${HOST:-vps}"
+HOST="${HOST:-root@89.124.4.220}"
 cd "$(dirname "$0")/.."
 make server-linux
 scp dist/keel-server-linux-amd64 deploy/keel-server.service "$HOST:/tmp/"
@@ -17,4 +17,4 @@ ssh "$HOST" 'set -e
   sudo systemctl enable --now keel-server
   sudo systemctl restart keel-server
   sleep 2; systemctl --no-pager --lines 5 status keel-server'
-echo "Deployed. Health: https://144-31-38-244.sslip.io/api/health"
+echo "Deployed. Health: https://89-124-4-220.sslip.io/api/health"

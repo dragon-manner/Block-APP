@@ -9,7 +9,7 @@ Group=keel
 WorkingDirectory=/var/lib/keel
 # HTTPS on :443 with a Let's Encrypt certificate for the sslip.io name of the VPS's IP.
 # Change -domain if you point a real domain at the box.
-ExecStart=/usr/local/bin/keel-server -domain 144-31-38-244.sslip.io -db /var/lib/keel/keel.db -certs /var/lib/keel/certs
+ExecStart=/usr/local/bin/keel-server -domain 89-124-4-220.sslip.io -db /var/lib/keel/keel.db -certs /var/lib/keel/certs
 Restart=always
 RestartSec=3
 # Binding 80/443 without running as root.

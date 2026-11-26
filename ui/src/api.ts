@@ -7,7 +7,7 @@ export const DEFAULT_SERVER: string =
   (import.meta.env.VITE_KEEL_SERVER as string | undefined) ||
   (bridge.kind === 'web' && location.protocol.startsWith('http') && !location.port.startsWith('51')
     ? location.origin
-    : 'https://144-31-38-244.sslip.io');
+    : 'https://89-124-4-220.sslip.io');
 
 export const session = signal<Session | null>(null);
 export const state = signal<State | null>(null);
