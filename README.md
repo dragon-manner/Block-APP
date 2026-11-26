@@ -88,7 +88,8 @@ and **Windows**. GNOME on Wayland gives apps no way to see the active window.
 Chrome/Edge: `chrome://extensions` → Developer mode → Load unpacked → `extension/`.
 Brave on this machine: add `--load-extension=/path/to/Block-APP/extension` to
 `~/.config/brave-flags.conf`. Firefox: `about:debugging` → Load Temporary Add-on, or sign the
-zip from Releases. The extension talks only to the Keel desktop app on `127.0.0.1:47823`; with
+zip from Releases. The extension talks only to the Keel desktop app, through native messaging
+(the app registers itself with each installed browser when it starts); with
 the desktop app closed it shows a "!" badge and nothing in that browser is counted.
 
 ## How strong is it?

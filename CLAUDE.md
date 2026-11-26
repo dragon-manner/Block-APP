@@ -289,7 +289,15 @@ extension walls the tab. Tray Quit waits out focus/lockdown. Reverse-DNS classes
 (`org.kde.kcalc`) are normalised to their last part so targets match the Windows exe name.
 State (session, today's usage, last enforcement) lives in `~/.local/share/keel` / `%APPDATA%`.
 
-**Extension bridge** (`ext.rs`, 127.0.0.1:47823) only answers requests carrying an
+**Extension → desktop is native messaging** (`native.rs`, host `app.keel.bridge`): Chromium
+14x+ Local Network Access silently blocks an extension worker's fetch to 127.0.0.1, so the
+extension `connectNative`s; the browser runs `keel <origin>`, which relays to the bridge below
+and exits on EOF (it must branch before the single-instance plugin). The app rewrites the host
+manifests for every installed browser on each start (Linux config dirs; HKCU on Windows). The
+extension's ID is pinned by `key` in its manifest (`peplbebfnbjpephhngiodiocekamldkf`); change
+it and `native.rs` together. Direct fetch stays as a fallback.
+
+**Extension bridge** (`ext.rs`, 127.0.0.1:47823; 47321 clashed with StreamVault) only answers requests carrying an
 `X-Keel-Ext` header from extension origins, so a web page can't spoof reel counts. Reel ids are
 de-duplicated per day; a reel opened over the limit is walled, not counted.
 

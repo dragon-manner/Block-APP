@@ -6,6 +6,7 @@
 mod engine;
 mod ext;
 mod model;
+mod native;
 mod sync;
 mod tracker;
 
@@ -116,6 +117,14 @@ fn show_wall(app: &AppHandle, reason: &str, message: &str, app_name: &str) {
 }
 
 pub fn run() {
+    // Started by a browser as the extension's native-messaging host: relay and exit, no UI.
+    // Must come before the single-instance plugin, which would otherwise hand the call to the
+    // running app and pop its window open on every extension message.
+    if native::invoked_as_host() {
+        native::run_host();
+        return;
+    }
+    native::install_manifests();
     let engine = Arc::new(Mutex::new(Engine::new()));
     let sync = sync::Sync::new(engine.clone());
     let hidden = std::env::args().any(|a| a == "--hidden");
