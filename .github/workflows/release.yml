@@ -112,11 +112,13 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with: { path: artifacts }
+      # No APK here on purpose: CI signs with a throwaway debug key, and Android refuses to
+      # update an installed app signed with a different key. The release APK is built and
+      # attached from the dev machine, whose key the phone's install already uses.
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             artifacts/server/*
             artifacts/desktop-Linux/**/*
             artifacts/desktop-Windows/**/*
-            artifacts/android/*
             artifacts/extension/*
