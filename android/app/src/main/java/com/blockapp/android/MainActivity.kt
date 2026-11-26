@@ -1,402 +1,162 @@
 package com.blockapp.android
 
 import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.graphics.Color
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.view.ViewGroup
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.togetherWith
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.animateContentSize
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.Color
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.CalendarMonth
-import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.Today
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.webkit.WebViewAssetLoader
 import com.blockapp.android.admin.DeviceAdminHelper
-import com.blockapp.android.ui.AppPickerScreen
-import com.blockapp.android.ui.FocusModeScreen
-import com.blockapp.android.ui.HomeScreen
-import com.blockapp.android.ui.HistoryScreen
-import com.blockapp.android.ui.LockedCelebration
-import com.blockapp.android.ui.LockedSummary
+import com.blockapp.android.sync.KeelBridge
 import com.blockapp.android.ui.OnboardingScreen
-import com.blockapp.android.ui.PlanScreen
-import com.blockapp.android.ui.QuizScreen
 import com.blockapp.android.ui.ReelEngineScreen
-import com.blockapp.android.ui.RewardsScreen
 import com.blockapp.android.ui.RemoveProtectionScreen
-import com.blockapp.android.ui.SettingsScreen
-import com.blockapp.android.ui.UnlockKeyScreen
 import com.blockapp.android.ui.theme.BlockAppTheme
-import com.blockapp.android.util.ReelPlan
-import java.time.LocalDate
-
-private sealed class Screen {
-    data object Home : Screen()
-
-    /** [day] opens straight on that day; null opens the month view. */
-    data class History(val day: LocalDate? = null) : Screen()
-    data object Settings : Screen()
-    data object Onboarding : Screen()
-    data object Quiz : Screen()
-    data object Plan : Screen()
-    data object FocusMode : Screen()
-    data object UnlockKey : Screen()
-    data object RemoveProtection : Screen()
-    data object ReelEngine : Screen()
-
-    /** Opened from Settings or from Home's level chip; [returnTo] is that tab. */
-    data class Rewards(val returnTo: Screen = Settings) : Screen()
-
-    /**
-     * [packageName] skips straight to the duration step for that app (the lock buttons on
-     * usage rows). [returnTo] is the tab it was opened from, which is where back and a
-     * finished lock both go.
-     */
-    data class AppPicker(val packageName: String? = null, val returnTo: Screen = Home) : Screen()
-}
-
-/** The bottom-bar destinations. Every other screen hides the bar while it is open. */
-private val Tabs = listOf(Screen.Home, Screen.History(), Screen.Settings)
-
-/** History is a tab whichever day it was opened on. */
-private fun Screen.isTab(): Boolean = this is Screen.Home || this is Screen.History || this is Screen.Settings
 
 /**
- * Where the system back gesture goes from each screen. A fixed parent per screen rather than a
- * real back stack — with this few screens that's enough, and it keeps one guarantee explicit:
- * every path terminates at [Screen.Home] in at most two hops, so back can never strand a user
- * on RemoveProtectionScreen (invariant 1 — that screen is the only way out once Device Admin has
- * locked the Settings routes away, and a dead end there is a factory-reset-grade problem).
- * AppPicker's [Screen.AppPicker.returnTo] is only ever a tab, and every tab's parent is Home.
+ * The shared Keel UI (ui/, bundled into assets/ui by `make sync`) in a WebView, plus the three
+ * screens that have to be native: setup (it walks Android's restricted-settings dance),
+ * Remove protection (it drops Device Admin in-process and must always be reachable, invariant 1)
+ * and the reel engine's counting settings.
+ *
+ * Every native screen goes back to the hub in one step, and the hub reaches Remove protection
+ * from Devices → This phone, so back can never strand anyone on it.
  */
-private fun Screen.parent(): Screen = when (this) {
-    Screen.Home -> Screen.Home
-    is Screen.History -> Screen.Home
-    Screen.Settings -> Screen.Home
-    Screen.FocusMode -> Screen.Home
-    Screen.UnlockKey -> Screen.Home
-    Screen.Quiz -> Screen.Home
-    Screen.Plan -> Screen.Home
-    is Screen.AppPicker -> returnTo
-    Screen.Onboarding -> Screen.Settings
-    Screen.RemoveProtection -> Screen.Settings
-    Screen.ReelEngine -> Screen.Settings
-    is Screen.Rewards -> returnTo
-}
+private enum class Screen { Hub, Setup, RemoveProtection, ReelEngine }
 
 class MainActivity : ComponentActivity() {
 
     private val requestNotificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* best-effort */ }
 
+    private var screen by mutableStateOf(Screen.Hub)
+    private var web: WebView? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Best-effort: the block-guard foreground service runs regardless of this permission,
-        // but without it its ongoing notification stays hidden on Android 13+, which makes it
-        // an easier target for OEM battery managers to kill unnoticed.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+        if (DeviceAdminHelper.requiresSetup(this)) screen = Screen.Setup
         setContent {
             BlockAppTheme {
                 Surface {
-                    AppRoot()
+                    BackHandler(enabled = screen != Screen.Hub) { screen = Screen.Hub }
+                    when (screen) {
+                        Screen.Hub -> Hub()
+                        Screen.Setup -> OnboardingScreen(
+                            onBack = { screen = Screen.Hub },
+                            onDone = { screen = Screen.Hub },
+                            onRemoveProtection = { screen = Screen.RemoveProtection },
+                        )
+                        Screen.RemoveProtection -> RemoveProtectionScreen(onDone = { screen = Screen.Hub })
+                        Screen.ReelEngine -> ReelEngineScreen(onBack = { screen = Screen.Hub })
+                    }
                 }
             }
         }
+    }
+
+    @Composable
+    private fun Hub() {
+        BackHandler(enabled = web?.canGoBack() == true) { web?.goBack() }
+        AndroidView(
+            modifier = Modifier.fillMaxSize().systemBarsPadding(),
+            factory = { obtainWebView().also { (it.parent as? ViewGroup)?.removeView(it) } },
+        )
+    }
+
+    /** One WebView for the activity's life, so leaving for setup and back doesn't reload the UI. */
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun obtainWebView(): WebView {
+        web?.let { return it }
+        val loader = WebViewAssetLoader.Builder()
+            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .build()
+        val view = WebView(this)
+        view.setBackgroundColor(Color.parseColor("#0E0F0C"))
+        view.settings.javaScriptEnabled = true
+        view.settings.domStorageEnabled = true
+        view.settings.allowFileAccess = false
+        view.settings.allowContentAccess = false
+        // Debug builds only: lets the UI (an https asset origin) reach a dev keel-server over
+        // plain http on the emulator host. Release keeps the default, which blocks it.
+        if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+            view.settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+        }
+        view.webViewClient = object : WebViewClient() {
+            override fun shouldInterceptRequest(v: WebView, request: WebResourceRequest): WebResourceResponse? =
+                loader.shouldInterceptRequest(request.url)
+
+            // Only the bundled UI runs in here, next to the bridge; any other page opens in the
+            // browser, where it can't call KeelAndroid.
+            override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {
+                if (request.url.host == ASSET_HOST) return false
+                runCatching { startActivity(Intent(Intent.ACTION_VIEW, request.url).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                return true
+            }
+        }
+        view.addJavascriptInterface(
+            KeelBridge(this) { target ->
+                runOnUiThread {
+                    screen = when (target) {
+                        "removeProtection" -> Screen.RemoveProtection
+                        "reelEngine" -> Screen.ReelEngine
+                        else -> Screen.Setup
+                    }
+                }
+            },
+            "KeelAndroid",
+        )
+        view.loadUrl(Uri.parse("https://$ASSET_HOST/assets/ui/index.html").toString())
+        web = view
+        return view
     }
 
     override fun onResume() {
         super.onResume()
-        // Retries a keep-alive start Android refused while the app was in the background; see
-        // BlockApplication.onAppForeground.
+        web?.onResume()
         (application as BlockApplication).onAppForeground()
     }
-}
 
-@Composable
-private fun AppRoot() {
-    val context = LocalContext.current
-
-    // A first launch opens on the quiz, which builds the reel plan, then goes on to setup. A
-    // later launch after Accessibility/admin was stripped opens straight on setup instead of on
-    // Home. Home's red banner is easy to skim past, and until both required permissions are on
-    // the app silently blocks nothing at all — which reads as "the app is broken", not "setup
-    // isn't finished".
-    fun afterQuiz(): Screen = if (DeviceAdminHelper.requiresSetup(context)) Screen.Onboarding else Screen.Home
-    var screen by remember {
-        mutableStateOf(if (!ReelPlan.quizSeen(context)) Screen.Quiz else afterQuiz())
+    override fun onPause() {
+        web?.onPause()
+        super.onPause()
     }
 
-    // Without this, back from any sub-screen or tab leaves the app entirely — which on this app means
-    // a user who opened Settings to reach "Remove protection" gets dropped to the launcher and
-    // has to start over. Disabled on Home so back there still exits, as expected.
-    BackHandler(enabled = screen != Screen.Home) { screen = screen.parent() }
-
-    // Shown on top of everything right after a lock starts. Navigation has already moved on
-    // underneath it, so dismissing it just reveals where the user was going anyway.
-    var celebration by remember { mutableStateOf<LockedSummary?>(null) }
-
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        bottomBar = {
-            AnimatedVisibility(
-                visible = screen.isTab(),
-                enter = slideInVertically { it } + fadeIn(),
-                exit = slideOutVertically { it } + fadeOut(),
-            ) {
-                BottomBar(current = screen, onSelect = { screen = it })
-            }
-        },
-    ) { padding ->
-        AnimatedContent(
-            targetState = screen,
-            modifier = Modifier.padding(padding),
-            transitionSpec = {
-                val from = initialState.depth()
-                val to = targetState.depth()
-                // Springs rather than fixed-length tweens, so a screen decelerates into place
-                // instead of stopping dead at 320ms, which is most of what made navigation feel
-                // stiff. Offsets are springs too, and fades stay short tweens so nothing lingers
-                // half-transparent.
-                val slide = spring<IntOffset>(dampingRatio = 0.9f, stiffness = SCREEN_STIFFNESS)
-                when {
-                    // Between tabs: a short glide in the direction of the tab tapped, so the
-                    // bar's order and the motion agree.
-                    from == 0 && to == 0 -> {
-                        val dir = if (targetState.tabIndex() >= initialState.tabIndex()) 1 else -1
-                        (slideInHorizontally(slide) { dir * it / 12 } + fadeIn(tween(200, delayMillis = 40)))
-                            .togetherWith(slideOutHorizontally(slide) { -dir * it / 12 } + fadeOut(tween(120)))
-                    }
-                    // Deeper: the new screen slides in from the right over the old one.
-                    to > from ->
-                        (slideInHorizontally(slide) { it / 4 } + fadeIn(tween(220)) + scaleIn(spring(stiffness = SCREEN_STIFFNESS), initialScale = 0.98f))
-                            .togetherWith(slideOutHorizontally(slide) { -it / 8 } + fadeOut(tween(160)))
-                    // Back out: the reverse.
-                    else ->
-                        (slideInHorizontally(slide) { -it / 8 } + fadeIn(tween(220)))
-                            .togetherWith(slideOutHorizontally(slide) { it / 4 } + fadeOut(tween(160)) + scaleOut(tween(200), targetScale = 0.98f))
-                }
-            },
-            label = "screen",
-        ) { target ->
-            when (target) {
-                Screen.Home -> HomeScreen(
-                    onFocusMode = { screen = Screen.FocusMode },
-                    onAddLock = { screen = Screen.AppPicker() },
-                    onLockApp = { screen = Screen.AppPicker(it, returnTo = Screen.Home) },
-                    onHistory = { screen = Screen.History(it) },
-                    onPlan = { screen = Screen.Plan },
-                    onFixSetup = { screen = Screen.Onboarding },
-                    onRewards = { screen = Screen.Rewards(returnTo = Screen.Home) },
-                )
-                is Screen.History -> HistoryScreen(
-                    initialDay = target.day,
-                    onLockApp = { screen = Screen.AppPicker(it, returnTo = target) },
-                )
-                Screen.Quiz -> QuizScreen(onDone = { screen = afterQuiz() })
-                Screen.Plan -> PlanScreen(
-                    onBack = { screen = Screen.Home },
-                    onRebuild = { screen = Screen.Quiz },
-                )
-                Screen.Settings -> SettingsScreen(
-                    onPermissions = { screen = Screen.Onboarding },
-                    onHistory = { screen = Screen.History() },
-                    onPlan = { screen = Screen.Plan },
-                    onEnterKey = { screen = Screen.UnlockKey },
-                    onRemoveProtection = { screen = Screen.RemoveProtection },
-                    onReelEngine = { screen = Screen.ReelEngine },
-                    onRewards = { screen = Screen.Rewards() },
-                )
-                Screen.ReelEngine -> ReelEngineScreen(
-                    onBack = { screen = Screen.Settings },
-                    onPlan = { screen = Screen.Plan },
-                    onRewards = { screen = Screen.Rewards() },
-                )
-                is Screen.Rewards -> RewardsScreen(onBack = { screen = target.returnTo })
-                is Screen.AppPicker -> AppPickerScreen(
-                    initialPackage = target.packageName,
-                    onBack = { screen = target.returnTo },
-                    onLocked = {
-                        screen = target.returnTo
-                        celebration = it
-                    },
-                )
-                Screen.FocusMode -> FocusModeScreen(
-                    onBack = { screen = Screen.Home },
-                    onLocked = {
-                        screen = Screen.Home
-                        celebration = it
-                    },
-                )
-                Screen.UnlockKey -> UnlockKeyScreen(onBack = { screen = Screen.Home })
-                Screen.Onboarding -> OnboardingScreen(
-                    onBack = { screen = Screen.Settings },
-                    onDone = { screen = Screen.Home },
-                    onRemoveProtection = { screen = Screen.RemoveProtection },
-                )
-                Screen.RemoveProtection -> RemoveProtectionScreen(
-                    onDone = { screen = Screen.Home },
-                )
-            }
-        }
+    override fun onDestroy() {
+        web?.destroy()
+        web = null
+        super.onDestroy()
     }
 
-    celebration?.let { summary ->
-        LockedCelebration(summary, onFinished = { celebration = null })
+    private companion object {
+        const val ASSET_HOST = "appassets.androidplatform.net"
     }
 }
-
-/** A tab's position in the bottom bar, for the direction a tab switch slides. */
-private fun Screen.tabIndex(): Int = when (this) {
-    Screen.Home -> 0
-    is Screen.History -> 1
-    else -> 2
-}
-
-/** Spring stiffness of screen changes: settles in about 300ms, with no visible bounce. */
-private const val SCREEN_STIFFNESS = 500f
-
-/** How deep a screen sits, which decides the direction screens slide in [AppRoot]. */
-private fun Screen.depth(): Int = when (this) {
-    Screen.Home, is Screen.History, Screen.Settings -> 0
-    Screen.RemoveProtection -> 2
-    else -> 1
-}
-
-/**
- * The three tabs. Drawn by hand rather than with Material's NavigationBar: the selected tab is a
- * Lime pill carrying its label, the others are icons with a quiet label under them, which reads
- * as one control at a glance rather than three equal buttons. The pill's width change is a
- * finite animation, so it's fine under the Motion.kt rule.
- */
-@Composable
-private fun BottomBar(current: Screen, onSelect: (Screen) -> Unit) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceContainerLow),
-    ) {
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .height(BAR_HEIGHT)
-                .padding(horizontal = 12.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Tabs.forEach { tab ->
-                val (label, icon) = when (tab) {
-                    is Screen.History -> "History" to Icons.Outlined.CalendarMonth
-                    Screen.Settings -> "Settings" to Icons.Outlined.Settings
-                    else -> "Today" to Icons.Outlined.Today
-                }
-                val selected = current::class == tab::class
-                // The icon of a newly picked tab springs up from small, so the tap lands visibly
-                // as well as being felt (the theme's indication buzzes on release).
-                val bump = remember { Animatable(1f) }
-                LaunchedEffect(selected) {
-                    if (selected) {
-                        bump.snapTo(TAB_BUMP_FROM)
-                        bump.animateTo(1f, spring(dampingRatio = 0.4f, stiffness = Spring.StiffnessMedium))
-                    }
-                }
-                val fill by animateColorAsState(
-                    if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
-                    tween(TAB_FADE_MS),
-                    label = "tab",
-                )
-                Row(
-                    Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(fill)
-                        .clickable(onClickLabel = label) { onSelect(tab) }
-                        .animateContentSize()
-                        .padding(horizontal = if (selected) 18.dp else 14.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        icon,
-                        contentDescription = if (selected) null else label,
-                        tint = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .size(22.dp)
-                            .graphicsLayer {
-                                scaleX = bump.value
-                                scaleY = bump.value
-                                rotationZ = (1f - bump.value) * TAB_BUMP_TILT
-                            },
-                    )
-                    if (selected) {
-                        Spacer(Modifier.width(8.dp))
-                        Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onPrimary)
-                    }
-                }
-            }
-        }
-    }
-}
-
-private val BAR_HEIGHT = 68.dp
-private const val TAB_FADE_MS = 180
-
-/** Where a picked tab's icon springs up from, and how far it tilts on the way. */
-private const val TAB_BUMP_FROM = 0.6f
-private const val TAB_BUMP_TILT = -30f

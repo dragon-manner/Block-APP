@@ -6,13 +6,13 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import android.widget.Toast
-import com.blockapp.android.BlockApplication
+import com.blockapp.android.sync.Policy
 import com.blockapp.android.MainActivity
 import com.blockapp.android.accessibility.AppBlockAccessibilityService
 
 /**
  * Device Admin is what makes the system refuse to uninstall this app. Removing it goes either
- * through RemoveProtectionScreen (the sanctioned route, in-process, refused while a lock runs) or
+ * through RemoveProtectionScreen (the sanctioned route, in-process, refused mid-focus/lockdown) or
  * through Settings' Device Admin pages, which Tier 1 guards. This receiver is the last line on
  * the Settings route: it hears about a Deactivate tap before the confirm dialog exists.
  */
@@ -32,9 +32,8 @@ class BlockDeviceAdminReceiver : DeviceAdminReceiver() {
      * thread of the process that enforces locks (invariant 9).
      */
     override fun onDisableRequested(context: Context, intent: Intent): CharSequence {
-        val locked = runCatching {
-            (context.applicationContext as BlockApplication).repository.activeLocks.value.isNotEmpty()
-        }.getOrDefault(false)
+        // Mid-focus or mid-lockdown is the 1.x "mid-lock": the screen locks as well.
+        val locked = runCatching { Policy.hardLocked() }.getOrDefault(false)
 
         val repelled = AppBlockAccessibilityService.repelAdminDeactivation()
         if (locked) {
@@ -57,12 +56,12 @@ class BlockDeviceAdminReceiver : DeviceAdminReceiver() {
         }
 
         return if (locked) {
-            "A lock is running. App Blocker can't be removed until it ends. Turning Device Admin " +
-                "off now doesn't end the lock: the app keeps guarding Accessibility and " +
-                "uninstall until the timer runs out."
+            "A focus round or lockdown is running. Keel can't be removed until it ends. " +
+                "Turning Device Admin off now doesn't end it: the app keeps guarding " +
+                "Accessibility and uninstall until it's over."
         } else {
-            "This turns off App Blocker's protection. To remove the app, use Settings → Remove " +
-                "protection inside App Blocker instead."
+            "This turns off Keel's protection. To remove the app, use Settings → Remove " +
+                "protection inside Keel instead."
         }
     }
 
@@ -79,7 +78,7 @@ class BlockDeviceAdminReceiver : DeviceAdminReceiver() {
         runCatching {
             Toast.makeText(
                 context,
-                "Device Admin was removed. Open App Blocker to turn it back on.",
+                "Device Admin was removed. Open Keel to turn it back on.",
                 Toast.LENGTH_LONG,
             ).show()
             context.startActivity(

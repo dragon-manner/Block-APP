@@ -16,7 +16,7 @@ import com.blockapp.android.accessibility.ServiceState
 
 /**
  * Single place the app asks "is capability X currently granted?". Despite the name it covers
- * every protective capability, not just Device Admin — battery exemption, exact alarms and
+ * every protective capability, not just Device Admin — battery exemption and
  * notifications are all revocable at any moment, so every one of them is a live query rather
  * than something cached at setup time. OnboardingScreen and SettingsScreen re-run these on
  * every resume for exactly that reason.
@@ -36,17 +36,6 @@ object DeviceAdminHelper {
         return powerManager.isIgnoringBatteryOptimizations(context.packageName)
     }
 
-    /**
-     * Whether this app can schedule exact alarms (used to auto-expire a lock at the right
-     * moment). Below API 31 this was unrestricted, so it's always true there. On API 31-32 it's
-     * granted automatically at install; on API 33+ the user must grant it explicitly via
-     * Settings, and can revoke it later, so this must be re-checked rather than assumed.
-     */
-    fun canScheduleExactAlarms(context: Context): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
-        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        return alarmManager.canScheduleExactAlarms()
-    }
 
     /**
      * Whether BlockGuardService's ongoing notification can actually be shown. Checked via

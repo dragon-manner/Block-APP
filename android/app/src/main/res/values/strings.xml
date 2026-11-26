@@ -1,7 +1,7 @@
 <resources>
-    <string name="app_name">App Blocker</string>
-    <string name="accessibility_service_description">Detects when a locked app is opened and returns you to the home screen until its timer ends. Also counts the short videos (reels, shorts) you scroll through each day. Nothing leaves your phone.</string>
-    <string name="guard_notification_channel_name">Block Guard</string>
-    <string name="guard_notification_title">Blocking is active</string>
-    <string name="guard_notification_text">Keeping locked apps enforced. Tap to open App Blocker.</string>
+    <string name="app_name">Keel</string>
+    <string name="accessibility_service_description">Closes apps and reel viewers when your Keel limits, focus sessions or quiet hours say so, on this phone as on your other devices. Also counts the short videos (reels, shorts) you scroll through so one daily reel limit can cover every device.</string>
+    <string name="guard_notification_channel_name">Keel guard</string>
+    <string name="guard_notification_title">Keel is enforcing your limits</string>
+    <string name="guard_notification_text">Keeps focus sessions and limits enforced. Tap to open Keel.</string>
 </resources>

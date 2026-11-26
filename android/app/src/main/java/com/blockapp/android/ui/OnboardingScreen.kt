@@ -37,7 +37,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.AccessibilityNew
-import androidx.compose.material.icons.outlined.Alarm
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.BatteryChargingFull
 import androidx.compose.material.icons.outlined.HourglassDisabled
@@ -96,7 +95,6 @@ fun OnboardingScreen(
     val protection = rememberProtection()
 
     var isBatteryUnrestricted  by remember { mutableStateOf(false) }
-    var canScheduleExactAlarms by remember { mutableStateOf(false) }
     var hasNotifications       by remember { mutableStateOf(false) }
     var hasUsageAccess         by remember { mutableStateOf(false) }
     var canDrawOverlays        by remember { mutableStateOf(false) }
@@ -148,7 +146,6 @@ fun OnboardingScreen(
     // Re-check every time this screen resumes (e.g. coming back from Settings).
     LifecycleResumeEffect(Unit) {
         isBatteryUnrestricted  = DeviceAdminHelper.isIgnoringBatteryOptimizations(context)
-        canScheduleExactAlarms = DeviceAdminHelper.canScheduleExactAlarms(context)
         hasNotifications       = DeviceAdminHelper.areNotificationsEnabled(context)
         hasUsageAccess         = UsageStatsProvider.hasUsageAccess(context)
         canDrawOverlays        = DeviceAdminHelper.canDrawOverlays(context)
@@ -197,9 +194,9 @@ fun OnboardingScreen(
                         AccessibilityUi.STARTING -> "Accessibility · starting"
                         else -> "Accessibility"
                     },
-                    why = "Lets App Blocker see which app is in front, so it can send you away " +
-                        "from a locked one and count reels. Everything stays on this phone. It " +
-                        "doesn't record what you type or keep what's on screen.",
+                    why = "Lets Keel see which app is in front, so it can send you away " +
+                        "from a blocked one and count reels. It sends your account only app names, " +
+                        "minutes and reel counts. It doesn't record what you type or keep what's on screen.",
                     state = when (protection.accessibility) {
                         AccessibilityUi.RUNNING, AccessibilityUi.STARTING -> StepState.Done
                         else -> StepState.Active
@@ -222,14 +219,14 @@ fun OnboardingScreen(
                                 openedAppInfo = true
                                 // Safe to open while this step is showing: the service isn't
                                 // running yet, so Tier 1 can't bounce this app's App info.
-                                openOrExplain(context, RestrictedSettings.appInfoIntent(context), "Settings → Apps → App Blocker")
+                                openOrExplain(context, RestrictedSettings.appInfoIntent(context), "Settings → Apps → Keel")
                             },
                             onTurnOn = ::openAccessibilitySwitch,
                         )
                     } else {
                         HowTo(
                             listOf(
-                                "Find \"App Blocker\", usually under Downloaded apps or Installed apps",
+                                "Find \"Keel\", usually under Downloaded apps or Installed apps",
                                 "Turn the switch on, then tap Allow",
                             ),
                         )
@@ -246,8 +243,8 @@ fun OnboardingScreen(
                     number = 2,
                     icon = Icons.Outlined.Shield,
                     title = "Device admin",
-                    why = "Makes Android ask for admin to be turned off before App Blocker can " +
-                        "be uninstalled, so it can't go in two taps mid-lock. To undo it later, " +
+                    why = "Makes Android ask for admin to be turned off before Keel can " +
+                        "be uninstalled, so it can't go in two taps mid-focus. To undo it later, " +
                         "use \"Remove protection\" at the top of this screen.",
                     state = when {
                         isAdminActive -> StepState.Done
@@ -268,7 +265,7 @@ fun OnboardingScreen(
                         onClick = {
                             val intent = DeviceAdminHelper.requestAdminIntent(
                                 context,
-                                "Prevents the app being uninstalled while a lock is active.",
+                                "Prevents Keel being uninstalled while your limits and focus sessions are on.",
                             )
                             try {
                                 adminLauncher.launch(intent)
@@ -280,13 +277,13 @@ fun OnboardingScreen(
                                 Toast.makeText(
                                     context,
                                     "This phone doesn't open the Device admin screen directly. Add " +
-                                        "\"App Blocker\" under Settings → Security → Device admin apps.",
+                                        "\"Keel\" under Settings → Security → Device admin apps.",
                                     Toast.LENGTH_LONG,
                                 ).show()
                             } catch (e: SecurityException) {
                                 Toast.makeText(
                                     context,
-                                    "Add \"App Blocker\" under Settings → Security → Device admin apps.",
+                                    "Add \"Keel\" under Settings → Security → Device admin apps.",
                                     Toast.LENGTH_LONG,
                                 ).show()
                             }
@@ -307,7 +304,7 @@ fun OnboardingScreen(
                         Text("Protection is on", style = MaterialTheme.typography.titleMedium, color = StatusColors.Success)
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "Locked apps will be bounced from now on. It makes giving in harder, " +
+                            "Blocked apps will be bounced from now on. It makes giving in harder, " +
                                 "not impossible: Safe Mode or Settings can still undo it.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -321,7 +318,7 @@ fun OnboardingScreen(
                     Extra(
                         Icons.Outlined.BatteryChargingFull,
                         "Unrestricted battery",
-                        "Stops Android from putting App Blocker to sleep partway through a lock.",
+                        "Stops Android from putting Keel to sleep partway through a focus session.",
                         isBatteryUnrestricted,
                     ) { requestIgnoreBatteryOptimizations(context) },
                 )
@@ -332,14 +329,6 @@ fun OnboardingScreen(
                         "Lets the block screen appear reliably after a bounce. Needed on Xiaomi and some others.",
                         canDrawOverlays,
                     ) { requestOverlay(context) },
-                )
-                add(
-                    Extra(
-                        Icons.Outlined.Alarm,
-                        "Exact alarms",
-                        "Ends a lock the minute its timer runs out, not a few minutes late.",
-                        canScheduleExactAlarms,
-                    ) { requestScheduleExactAlarm(context) },
                 )
                 add(
                     Extra(
@@ -379,7 +368,7 @@ fun OnboardingScreen(
             }
             Spacer(Modifier.height(4.dp))
             Text(
-                "Optional. Locks work without these, just less dependably. Each one ticks itself.",
+                "Optional. Blocking works without these, just less dependably. Each one ticks itself.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -420,7 +409,7 @@ fun OnboardingScreen(
                     done = step.id in oemDone,
                     onOpen = {
                         if (!OemBackground.open(context, step)) {
-                            Toast.makeText(context, "Couldn't open it here. Look in Settings → Apps → App Blocker.", Toast.LENGTH_LONG).show()
+                            Toast.makeText(context, "Couldn't open it here. Look in Settings → Apps → Keel.", Toast.LENGTH_LONG).show()
                         }
                     },
                     onToggle = { done ->
@@ -450,7 +439,7 @@ fun OnboardingScreen(
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    "App Blocker has no internet permission. Nothing it sees can leave this phone.",
+                    "Keel syncs only app names, minutes and reel counts to your own Keel server, never what's on screen.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -471,7 +460,7 @@ fun OnboardingScreen(
 private fun NotRunningFix(maker: OemBackground.Maker, onOpenSwitch: () -> Unit) {
     Panel(color = StatusColors.Warning.copy(alpha = 0.10f), contentPadding = androidx.compose.foundation.layout.PaddingValues(14.dp)) {
         Text(
-            "The switch is on, but Android isn't running App Blocker's service, so nothing is " +
+            "The switch is on, but Android isn't running Keel's service, so nothing is " +
                 "being blocked." + if (maker == OemBackground.Maker.SAMSUNG) " Samsung shows this as \"Not working\"." else "",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurface,
@@ -480,7 +469,7 @@ private fun NotRunningFix(maker: OemBackground.Maker, onOpenSwitch: () -> Unit) 
     Spacer(Modifier.height(12.dp))
     HowTo(
         listOf(
-            "Open the App Blocker switch",
+            "Open the Keel switch",
             "Turn it off, then on again, and tap Allow",
             "Come back here. This step ticks itself once it's running",
         ),
@@ -690,7 +679,7 @@ private fun AccessibilityWalkthrough(
 ) {
     var expanded by rememberSaveable { mutableStateOf(likelyRestricted) }
     if (!expanded) {
-        HowTo(listOf("Tap the App Blocker switch", "Tap Allow"))
+        HowTo(listOf("Tap the Keel switch", "Tap Allow"))
         Spacer(Modifier.height(14.dp))
         PrimaryButton("Open the switch", onTurnOn, Modifier.fillMaxWidth())
         Spacer(Modifier.height(4.dp))
@@ -716,7 +705,7 @@ private fun AccessibilityWalkthrough(
         number = 1,
         current = current,
         title = "Try the switch once",
-        detail = "Tap App Blocker's switch. Android says \"Restricted setting\". Tap OK. That's " +
+        detail = "Tap Keel's switch. Android says \"Restricted setting\". Tap OK. That's " +
             "expected, and it's what unlocks step 2.",
         button = "Open the switch",
         onClick = onTrySwitch,
@@ -907,14 +896,6 @@ private fun openOrExplain(context: Context, intent: Intent, where: String) {
     }
 }
 
-private fun requestScheduleExactAlarm(context: Context) {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
-    openOrExplain(
-        context,
-        Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${context.packageName}")),
-        "Settings → Apps → Special app access → Alarms & reminders",
-    )
-}
 
 /**
  * The direct request is a one-tap system dialog that sets the app to "Unrestricted" (on a Pixel,
@@ -933,7 +914,7 @@ private fun requestIgnoreBatteryOptimizations(context: Context) {
         openOrExplain(
             context,
             Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
-            "Settings → Apps → App Blocker → App battery usage",
+            "Settings → Apps → Keel → App battery usage",
         )
     }
 }
@@ -952,7 +933,7 @@ private fun openNotificationSettings(context: Context) {
     try {
         context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     } catch (e: ActivityNotFoundException) {
-        openOrExplain(context, RestrictedSettings.appInfoIntent(context), "Settings → Apps → App Blocker")
+        openOrExplain(context, RestrictedSettings.appInfoIntent(context), "Settings → Apps → Keel")
     }
 }
 
@@ -975,7 +956,7 @@ private fun requestHibernationExemption(context: Context) {
     try {
         context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     } catch (e: ActivityNotFoundException) {
-        openOrExplain(context, RestrictedSettings.appInfoIntent(context), "Settings → Apps → App Blocker")
+        openOrExplain(context, RestrictedSettings.appInfoIntent(context), "Settings → Apps → Keel")
     }
 }
 

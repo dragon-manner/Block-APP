@@ -7,11 +7,11 @@ import java.time.LocalDate
 /**
  * The user's settings for the reel engine: which of ReelApps.KNOWN are counted, how the reel
  * pill (ReelBubble) looks and where it sits, and when the "N reels left" warning comes.
- * SharedPreferences like ReelLimit, so they're in the Auto Backup and need no schema bump.
+ * SharedPreferences like sync/Policy, so they're in the Auto Backup and need no schema bump.
  *
  * **Turning tracking off for an app waits until tomorrow; turning it on is immediate.** An app
  * that isn't tracked can't reach the reel limit or reel-free hours (Tier 3), so an immediate
- * "off" would be the same one-tap way out that ReelLimit's tomorrow rule and invariant 4 exist
+ * "off" would be the same one-tap way out that the server's tomorrow rule and invariant 4 exist
  * to close. The pill and the warning are only presentation: those apply at once.
  *
  * AppBlockAccessibilityService reads [trackedPackages] on connect, at midnight, and whenever

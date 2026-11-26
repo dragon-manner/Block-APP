@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import com.blockapp.android.BlockApplication
-import com.blockapp.android.util.ReelPlan
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -20,11 +19,10 @@ class UsageArchiveReceiver : BroadcastReceiver() {
         app.applicationScope.launch {
             try {
                 UsageArchive.archiveRecent(context, app.repository)
-                ReelPlan.refresh(context, app.repository)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: RuntimeException) {
-                // A statistic must not crash the process that enforces locks (invariant 9).
+                // A statistic must not crash the process that enforces limits (invariant 9).
                 Log.w("UsageArchive", "daily archive failed", e)
             } finally {
                 pendingResult.finish()

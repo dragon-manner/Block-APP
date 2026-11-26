@@ -2,6 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- Keel 2 syncs with the account's server: one set of limits and one reel count across the
+         phone, laptop and browsers. 1.x deliberately had no network permission (offline unlock
+         keys); that design is gone, and this is the one permission its replacement needs. -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -11,10 +15,6 @@
          it every vibrate() call throws a SecurityException, which Haptics swallows, so the app
          would silently never vibrate. -->
     <uses-permission android:name="android.permission.VIBRATE" />
-    <!-- Needed for AlarmScheduler's setExactAndAllowWhileIdle: on API 33+ this is not granted
-         at install time, and calling that API without it throws a SecurityException, which
-         would silently break auto-expiry of a lock at its scheduled time. -->
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <!-- Optional, granted by the user under "Display over other apps". Nothing is drawn with it;
          holding it exempts the app from Android's background limits on starting activities and
          foreground services, which on Xiaomi and some other builds otherwise stop the block wall
@@ -41,8 +41,8 @@
         android:dataExtractionRules="@xml/data_extraction_rules"
         tools:targetApi="31">
 
-        <!-- adjustResize: the custom-duration number pad otherwise covers the Lock button on
-             AppPickerScreen and FocusModeScreen, with no way to scroll it back into view. -->
+        <!-- adjustResize: the keyboard otherwise covers the task and login fields in the
+             WebView UI, with no way to scroll them back into view. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -75,10 +75,6 @@
             </intent-filter>
         </receiver>
 
-        <receiver
-            android:name=".alarm.BlockExpiryReceiver"
-            android:exported="false" />
-
         <!-- Daily, from AlarmScheduler.scheduleDailyArchive. -->
         <receiver
             android:name=".usage.UsageArchiveReceiver"
@@ -110,7 +106,7 @@
             android:exported="false">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Keeps the app-blocking accessibility service alive while a lock is active" />
+                android:value="Keeps the app-blocking accessibility service alive while limits or a focus session are being enforced" />
         </service>
 
     </application>

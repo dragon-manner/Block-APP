@@ -21,8 +21,9 @@ import com.blockapp.android.admin.DeviceAdminHelper
 import com.blockapp.android.ui.BlockOverlayActivity
 import com.blockapp.android.util.ProtectedPackages
 import com.blockapp.android.util.ReelApps
-import com.blockapp.android.util.ReelLimit
-import com.blockapp.android.util.ReelPlan
+import com.blockapp.android.sync.Catalog
+import com.blockapp.android.sync.Policy
+import com.blockapp.android.util.InstalledAppsProvider
 import com.blockapp.android.util.ReelSettings
 import com.blockapp.android.util.Haptics
 import kotlinx.coroutines.CancellationException
@@ -37,7 +38,6 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import java.time.LocalDate
 import java.time.ZoneId
 
@@ -67,9 +67,10 @@ import java.time.ZoneId
  *   "Remove protection" flow (RemoveProtectionScreen), which deactivates admin itself,
  *   in-process, without ever needing to reach the guarded Settings UI.
  *
- * Tier 2 – Active only while locks are running:
- *   If any locked package comes to the foreground it is immediately kicked to the home
- *   screen and the block overlay is shown.
+ * Tier 2 – the synced policy (sync/Policy), active while it has anything to enforce:
+ *   an app whose category a strict focus round, a lockdown or quiet hours closes, or whose
+ *   shared daily time limit is spent across every device, is kicked to the home screen and
+ *   the wall is shown with the reason.
  *
  * Device Admin deactivation itself already goes through a system confirmation dialog with our
  * own warning text (see BlockDeviceAdminReceiver) -- the guard here stops reaching that
@@ -82,8 +83,9 @@ import java.time.ZoneId
  * they have no bearing on enforcement. Content-change events in particular go nowhere near
  * Tier 1 or Tier 2; they only arm the tracker's throttled scan.
  *
- * Tier 3 – the daily reel limit (util/ReelLimit), the one place reel tracking leads to action:
- *   once today's total reaches the user's limit, a reel session that opens (or one that is open
+ * Tier 3 – the shared reel limit (Policy.reelVerdict), the one place reel tracking leads to
+ *   action: once the total across the phone and every browser reaches the limit (or a focus
+ *   round, lockdown or reel-free hours close reels), a reel session that opens (or one that is open
  *   when the limit is reached) is answered with GLOBAL_ACTION_BACK and the reel-limit wall. It
  *   acts only on what ReelTracker already calls a reel viewer, which never includes this app,
  *   launchers, or ProtectedPackages, so it can't reach the screens setup and removal depend on.
@@ -135,31 +137,13 @@ class AppBlockAccessibilityService : AccessibilityService() {
     private var reelSessionPackage: String? = null
     private var reelTotalToday = -1
     private var lastLimitKickAt = 0L
-    /** What the reel wall shows: today's limit, or a reel-free window ending at [until]. */
-    private class ReelWall(val packageName: String, val limit: Int, val until: Long, val quietFrom: Long?)
-
-    private var pendingLimitWall: ReelWall? = null
+    private var pendingLimitWall: Pair<String, Policy.Verdict>? = null
 
     private val showReelLimitWall = Runnable {
-        val wall = pendingLimitWall ?: return@Runnable
+        val (pkg, verdict) = pendingLimitWall ?: return@Runnable
         pendingLimitWall = null
-        runCatching { startReelWall(wall) }.onFailure { Log.w(TAG, "reel wall refused", it) }
-    }
-
-    private fun startReelWall(wall: ReelWall) {
-        startActivity(
-            Intent(this, BlockOverlayActivity::class.java).apply {
-                addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                        Intent.FLAG_ACTIVITY_NO_ANIMATION,
-                )
-                putExtra(BlockOverlayActivity.EXTRA_PACKAGE_NAME, wall.packageName)
-                putExtra(BlockOverlayActivity.EXTRA_BLOCK_UNTIL, wall.until)
-                putExtra(BlockOverlayActivity.EXTRA_REEL_LIMIT, wall.limit)
-                wall.quietFrom?.let { putExtra(BlockOverlayActivity.EXTRA_QUIET_FROM, it) }
-            },
-        )
+        runCatching { startActivity(BlockOverlayActivity.intent(this, pkg, verdict, reels = true)) }
+            .onFailure { Log.w(TAG, "reel wall refused", it) }
     }
 
     /**
@@ -173,14 +157,18 @@ class AppBlockAccessibilityService : AccessibilityService() {
      * closes that gap: even a fully missed event gets caught on the very next tick instead of
      * never.
      *
-     * Only ever scheduled while [BlockApplication.repository]'s activeLocks is non-empty (see
+     * Only ever scheduled while Policy.armed() (see
      * the collector in onServiceConnected) — there is nothing to self-heal when nothing is
      * locked, so it costs zero wakeups the rest of the time this service is connected, which is
      * effectively all the time once Accessibility is granted.
      */
     private val watchdog = object : Runnable {
         override fun run() {
-            checkForegroundAgainstLocks()
+            try {
+                checkForeground()
+            } catch (e: RuntimeException) {
+                Log.w(TAG, "watchdog check failed", e)
+            }
             handler.postDelayed(this, WATCHDOG_INTERVAL_MS)
         }
     }
@@ -201,12 +189,10 @@ class AppBlockAccessibilityService : AccessibilityService() {
         ServiceState.markConnected(true)
         val app = application as BlockApplication
         live = java.lang.ref.WeakReference(this)
+        homePackages = homePackages()
         try {
-            val currentPackage = rootInActiveWindow?.packageName?.toString()
-            if (currentPackage != null) {
-                val blockUntil = runBlocking { app.repository.getActiveLockUntil(currentPackage) }
-                if (blockUntil != null) kickToHome(currentPackage, blockUntil)
-            }
+            // Policy loaded its stored copy at process start, so this needs no network.
+            checkForeground()
         } catch (e: RuntimeException) {
             // The watchdog below catches the same app a tick later; a failed first look must not
             // stop the service from finishing its setup.
@@ -232,8 +218,8 @@ class AppBlockAccessibilityService : AccessibilityService() {
             }
         }
         scope.launch {
-            app.repository.activeLocks.collect { locks ->
-                if (locks.isNotEmpty()) {
+            Policy.state.collect {
+                if (Policy.armed()) {
                     if (!watchdogScheduled) {
                         watchdogScheduled = true
                         handler.post(watchdog)
@@ -248,7 +234,7 @@ class AppBlockAccessibilityService : AccessibilityService() {
 
     @RequiresApi(Build.VERSION_CODES.P)
     private fun connectReelTracking(app: BlockApplication, scope: CoroutineScope) {
-        val bubble = ReelBubble(this, app.repository, scope) { ReelLimit.todayLimit(this) }
+        val bubble = ReelBubble(this, app.repository, scope, { Policy.reelLimit() }, { Policy.reelsElsewhere() })
         reelBubble = bubble
         bubbleTransientPackages = bubbleTransientPackages()
         refreshTrackedPackages()
@@ -293,29 +279,13 @@ class AppBlockAccessibilityService : AccessibilityService() {
                 .flatMapLatest { day -> app.repository.observeReelTotal(day) }
                 .collect { total -> onReelTotal(total) }
         }
-        // The reel plan's next step, applied the moment the day turns, so a new week's
-        // lower limit doesn't wait for the app to be opened. The process-start and daily
-        // alarm runs cover the rest (see ReelPlan.refresh).
         scope.launch {
-            todayTicker().collect {
-                // An app switched off yesterday stops being counted from today.
-                refreshTrackedPackages()
-                try {
-                    ReelPlan.refresh(this@AppBlockAccessibilityService, app.repository)
-                    // Marks today as one the counter was watching, so a day with no reels
-                    // reads as reel-free rather than as no data (see PlanDayEntity.tracked).
-                    app.repository.recordPlanDay(
-                        ReelLimit.todayLimit(this@AppBlockAccessibilityService),
-                        tracked = true,
-                    )
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: RuntimeException) {
-                    // A plan step is not worth the service (invariant 9).
-                    Log.w("ReelPlan", "refresh failed", e)
-                }
-            }
+            // An app switched off yesterday stops being counted from today.
+            todayTicker().collect { refreshTrackedPackages() }
         }
+        // A limit lowered on another device, or a focus round starting, must close a reel
+        // viewer that's already open, not only the next one.
+        scope.launch { Policy.state.collect { enforceReelLimit() } }
     }
 
     override fun onDestroy() {
@@ -399,22 +369,84 @@ class AppBlockAccessibilityService : AccessibilityService() {
             }
         }
 
-        // Tier 2: block locked apps (only when a lock is running)
-        checkForegroundAgainstLocks(eventPackage)
+        // Tier 2: the synced policy.
+        checkForeground(eventPackage)
+    }
+
+    /** Launchers: never blocked, or HOME would bounce straight back into the wall. */
+    private var homePackages: Set<String> = emptySet()
+
+    private fun homePackages(): Set<String> = runCatching {
+        packageManager.queryIntentActivities(
+            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
+            0,
+        ).map { it.activityInfo.packageName }.toSet()
+    }.getOrDefault(emptySet())
+
+    /** The target in front and since when, so a time limit runs out mid-session, not after. */
+    private var foregroundTarget: String? = null
+    private var foregroundSince = 0L
+    /** Soft focus: the distraction in front and since when; see [checkSoftFocus]. */
+    private var distraction: Pair<String, Long>? = null
+    private val violatedSessions = HashSet<Long>()
+
+    /**
+     * Looks up [knownPackage] (or, if absent, whatever's currently in front) against the synced
+     * policy and kicks it home if it is blocked. Shared by the immediate event path (which
+     * already knows the package) and the [watchdog] poll (which doesn't).
+     */
+    private fun checkForeground(knownPackage: String? = null) {
+        if (Policy.state.value == null) return
+        val pkg = knownPackage ?: rootInActiveWindow?.packageName?.toString() ?: return
+        if (pkg == packageName || pkg in ProtectedPackages.ALL || pkg in homePackages ||
+            pkg in bubbleTransientPackages
+        ) {
+            distraction = null
+            return
+        }
+        val target = Catalog.targetFor(this, pkg)
+        val now = System.currentTimeMillis()
+        if (target != foregroundTarget) {
+            foregroundTarget = target
+            foregroundSince = now
+        }
+        val e = Policy.state.value ?: return
+        val category = Catalog.category(this, target, e.overrides)
+        // Usage stats as of the last report, plus the part of this session since then.
+        val live = (now - maxOf(foregroundSince, Policy.localAt)).coerceAtLeast(0L) / 1000
+        val localSec = (Policy.localUsage[target] ?: 0L) + live
+        val name = Catalog.name(this, target) ?: InstalledAppsProvider.label(this, pkg)
+        val verdict = Policy.verdict(target, name, category, localSec)
+        if (verdict != null) {
+            distraction = null
+            kickToHome(pkg, verdict)
+            return
+        }
+        checkSoftFocus(e, target, name, category, now)
     }
 
     /**
-     * Looks up [knownPackage] (or, if absent, whatever's currently in front) against the active
-     * locks and kicks it home if it's locked. Shared by the immediate event path (which already
-     * knows the package from the event, so it skips the rootInActiveWindow call) and the
-     * [watchdog] poll (which doesn't).
+     * A soft focus round blocks nothing; holding a distraction in front past
+     * [SOFT_FOCUS_GRACE_MS] withers the tree instead, once per session.
      */
-    private fun checkForegroundAgainstLocks(knownPackage: String? = null) {
-        val app = application as BlockApplication
-        val activeLocks = app.repository.activeLocks.value
-        if (activeLocks.isEmpty()) return
-        val currentPackage = knownPackage ?: rootInActiveWindow?.packageName?.toString() ?: return
-        activeLocks[currentPackage]?.let { blockUntil -> kickToHome(currentPackage, blockUntil) }
+    private fun checkSoftFocus(e: Policy.Enforce, target: String, name: String, category: String, now: Long) {
+        val f = e.focus
+        if (f == null || f.strict || Policy.workPhase(e) == null || category !in f.categories || f.id in violatedSessions) {
+            distraction = null
+            return
+        }
+        val d = distraction
+        if (d == null || d.first != target) {
+            distraction = target to now
+            Toast.makeText(this, "$name during focus: your tree withers in ${SOFT_FOCUS_GRACE_MS / 1000}s", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (now - d.second >= SOFT_FOCUS_GRACE_MS) {
+            violatedSessions += f.id
+            distraction = null
+            (application as BlockApplication).sync.violation(f.id, name)
+            Haptics.reject(this)
+        }
     }
 
     /**
@@ -432,7 +464,7 @@ class AppBlockAccessibilityService : AccessibilityService() {
 
     private fun guardMode(): Guard = when {
         DeviceAdminHelper.isAdminActive(this) -> Guard.FULL
-        (application as BlockApplication).repository.activeLocks.value.isNotEmpty() -> Guard.LOCKED
+        Policy.hardLocked() -> Guard.LOCKED
         else -> Guard.OFF
     }
 
@@ -548,11 +580,11 @@ class AppBlockAccessibilityService : AccessibilityService() {
         // The poll can bounce twice inside one HOME transition; one toast is enough.
         if (now - lastBounceToastAt < BOUNCE_TOAST_GAP_MS) return
         lastBounceToastAt = now
-        val locked = (application as BlockApplication).repository.activeLocks.value.isNotEmpty()
+        val locked = Policy.hardLocked()
         Toast.makeText(
             this,
             if (locked) {
-                "Locked until your timer ends. ${getString(R.string.app_name)} can't be removed mid-lock."
+                "Not during a focus round or lockdown. ${getString(R.string.app_name)} can be removed once it ends."
             } else {
                 "This setting is protected by ${getString(R.string.app_name)}. Use Remove protection in the app."
             },
@@ -588,33 +620,22 @@ class AppBlockAccessibilityService : AccessibilityService() {
      * wall always comes last, after the final HOME of a burst. The HOME itself stays
      * immediate, so enforcement never waits on the delay.
      */
-    private fun kickToHome(packageName: String, blockUntil: Long) {
+    private fun kickToHome(packageName: String, verdict: Policy.Verdict) {
         performGlobalAction(GLOBAL_ACTION_HOME)
         handler.removeCallbacks(showOverlay)
-        pendingOverlay = packageName to blockUntil
+        pendingOverlay = packageName to verdict
         handler.postDelayed(showOverlay, OVERLAY_DELAY_MS)
     }
 
-    private var pendingOverlay: Pair<String, Long>? = null
+    private var pendingOverlay: Pair<String, Policy.Verdict>? = null
 
     private val showOverlay = Runnable {
-        val (packageName, blockUntil) = pendingOverlay ?: return@Runnable
+        val (packageName, verdict) = pendingOverlay ?: return@Runnable
         pendingOverlay = null
-        val overlayIntent = Intent(this, BlockOverlayActivity::class.java).apply {
-            // NO_ANIMATION on top of the usual flags: without it the user sees the launcher's
-            // window animation and then the overlay's, back to back, which reads as a glitch
-            // rather than as one deliberate bounce.
-            addFlags(
-                Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                    Intent.FLAG_ACTIVITY_NO_ANIMATION,
-            )
-            putExtra(BlockOverlayActivity.EXTRA_PACKAGE_NAME, packageName)
-            putExtra(BlockOverlayActivity.EXTRA_BLOCK_UNTIL, blockUntil)
-        }
         // A posted Runnable is outside onAccessibilityEvent's guard. The bounce home has already
         // happened by now, so a refused start loses the explanation, not the block.
-        runCatching { startActivity(overlayIntent) }.onFailure { Log.w(TAG, "wall refused", it) }
+        runCatching { startActivity(BlockOverlayActivity.intent(this, packageName, verdict)) }
+            .onFailure { Log.w(TAG, "wall refused", it) }
     }
 
     /**
@@ -625,47 +646,35 @@ class AppBlockAccessibilityService : AccessibilityService() {
     private fun onReelTotal(total: Int) {
         val previous = reelTotalToday
         reelTotalToday = total
-        val limit = ReelLimit.todayLimit(this)
+        val limit = Policy.reelLimit()
         val warnBefore = ReelSettings.warnAt(this)
-        if (limit != null && warnBefore > 0) {
+        if (limit != null && warnBefore > 0 && previous >= 0) {
+            val elsewhere = Policy.reelsElsewhere()
             val warnAt = limit - warnBefore
-            if (previous in 0 until warnAt && total in warnAt until limit) {
-                Toast.makeText(this, "${limit - total} reels left today", Toast.LENGTH_SHORT).show()
+            if (previous + elsewhere in 0 until warnAt && total + elsewhere in warnAt until limit) {
+                Toast.makeText(this, "${limit - total - elsewhere} reels left today, on every device", Toast.LENGTH_SHORT).show()
                 if (ReelSettings.warnBuzz(this)) Haptics.reject(this)
             }
         }
-        // Runs with no limit too: reel-free hours apply whether or not a limit is set.
         enforceReelLimit()
     }
 
     /**
-     * Tier 3: backs out of the open reel viewer and shows the reel-limit wall, if today's total
-     * has reached the limit. BACK rather than HOME so only the reel viewer is left: the app
-     * underneath (Instagram's feed, YouTube's home) stays usable, which is the promise the wall
-     * makes. The wall follows OVERLAY_DELAY_MS later for the same reason as Tier 2's.
+     * Tier 3: backs out of an open reel viewer when the shared limit is spent or reels are
+     * closed right now (focus round, lockdown, reel-free hours), and shows why.
      */
     private fun enforceReelLimit() {
         val packageName = reelSessionPackage ?: return
-        // Reel-free hours (ReelPlan) close a viewer whatever today's count is. Read on every
-        // call rather than cached, so a window that starts while a session is open applies at
-        // the next counted reel.
-        val quiet = ReelPlan.quietWindowAt(this)
-        val limit = ReelLimit.todayLimit(this)
-        val wall = when {
-            quiet != null -> ReelWall(packageName, limit ?: NO_LIMIT, until = quiet.second, quietFrom = quiet.first)
-            // reelTotalToday is -1 until Room's first answer, so a 0 limit waits for it too.
-            limit != null && reelTotalToday >= 0 && reelTotalToday >= limit ->
-                ReelWall(packageName, limit, until = nextMidnight(), quietFrom = null)
-            else -> return
-        }
+        // reelTotalToday is -1 until Room's first answer, so a 0 limit waits for it too.
+        if (reelTotalToday < 0) return
+        val verdict = Policy.reelVerdict(reelTotalToday) ?: return
         val now = SystemClock.uptimeMillis()
         // One kick per burst: the session-start and total-changed paths often fire together.
         if (now - lastLimitKickAt < LIMIT_KICK_COOLDOWN_MS) return
         lastLimitKickAt = now
-        (application as BlockApplication).repository.recordReelWall(quiet = quiet != null, limit = limit)
         performGlobalAction(GLOBAL_ACTION_BACK)
         handler.removeCallbacks(showReelLimitWall)
-        pendingLimitWall = wall
+        pendingLimitWall = packageName to verdict
         handler.postDelayed(showReelLimitWall, OVERLAY_DELAY_MS)
     }
 
@@ -675,9 +684,6 @@ class AppBlockAccessibilityService : AccessibilityService() {
             delay(DAY_CHECK_MS)
         }
     }.distinctUntilChanged()
-
-    private fun nextMidnight(): Long =
-        LocalDate.now().plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
 
     /**
      * Windows that open on top of the reel viewer without the user leaving it: the
@@ -718,8 +724,15 @@ class AppBlockAccessibilityService : AccessibilityService() {
             return runCatching { service.backOutOfAdminDeactivation() }.isSuccess
         }
 
-        /** How often the watchdog re-checks the foreground app against active locks. */
-        private const val WATCHDOG_INTERVAL_MS = 200L
+        /**
+         * How often the watchdog re-checks the foreground app while the policy is armed. Fast
+         * enough that a missed window event costs well under a second; slower than the 200ms
+         * 1.x used, because it now runs whenever any limit exists, not only during a lock.
+         */
+        private const val WATCHDOG_INTERVAL_MS = 500L
+
+        /** How long a soft focus round lets a distraction sit in front before the tree withers. */
+        private const val SOFT_FOCUS_GRACE_MS = 10_000L
 
         /**
          * Wait between sending a locked app home and showing the block wall. Long enough for
@@ -727,9 +740,6 @@ class AppBlockAccessibilityService : AccessibilityService() {
          * wall reads as the cause of the bounce rather than a separate event.
          */
         private const val OVERLAY_DELAY_MS = 350L
-
-        /** EXTRA_REEL_LIMIT for a reel-free-hours wall with no daily limit set. */
-        private const val NO_LIMIT = -1
 
         /** Minimum spacing between reel-limit kicks; see enforceReelLimit. */
         private const val LIMIT_KICK_COOLDOWN_MS = 1_500L

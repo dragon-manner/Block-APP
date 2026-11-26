@@ -12,12 +12,6 @@ class BootCompletedReceiver : BroadcastReceiver() {
         val app = context.applicationContext as BlockApplication
         val pendingResult = goAsync()
         app.applicationScope.launch {
-            app.repository.expireAllDue()
-            app.repository.getActiveOnce().forEach { entity ->
-                if (entity.blockUntil > System.currentTimeMillis()) {
-                    AlarmScheduler.schedule(context, entity.packageName, entity.blockUntil)
-                }
-            }
             AlarmScheduler.scheduleDailyArchive(context)
             pendingResult.finish()
         }

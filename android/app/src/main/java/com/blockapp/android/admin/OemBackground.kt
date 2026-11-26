@@ -15,7 +15,7 @@ import android.provider.Settings
  * On a Pixel, battery "Unrestricted" plus a running accessibility service is enough. On most
  * other phones it isn't. Xiaomi, Oppo/Realme/OnePlus, Vivo and Huawei/Honor kill background apps
  * that aren't on their own autostart list, and once the process is gone the accessibility
- * service has to wait for a rebind, during which locks aren't enforced. Xiaomi also keeps a
+ * service has to wait for a rebind, during which nothing is enforced. Xiaomi also keeps a
  * separate "Display pop-up windows while running in the background" permission, without which the
  * block wall never appears. Samsung puts apps it considers unused into "Sleeping apps".
  *
@@ -66,8 +66,8 @@ object OemBackground {
             Maker.SAMSUNG -> listOf(
                 Step(
                     id = "samsung_never_sleep",
-                    title = "Never put App Blocker to sleep",
-                    detail = "Battery → Background usage limits → Never sleeping apps → + → App Blocker. " +
+                    title = "Never put Keel to sleep",
+                    detail = "Battery → Background usage limits → Never sleeping apps → + → Keel. " +
                         "Samsung otherwise sleeps apps it thinks you don't use, and a sleeping app can't block.",
                     intents = listOf(
                         component("com.samsung.android.lool", "com.samsung.android.sm.battery.ui.BatteryActivity"),
@@ -81,7 +81,7 @@ object OemBackground {
                 Step(
                     id = "xiaomi_autostart",
                     title = "Turn on Autostart",
-                    detail = "Find App Blocker in the list and turn it on, so MIUI and HyperOS let it " +
+                    detail = "Find Keel in the list and turn it on, so MIUI and HyperOS let it " +
                         "come back after a restart.",
                     intents = listOf(
                         component("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity"),
@@ -103,11 +103,11 @@ object OemBackground {
                 Step(
                     id = "xiaomi_battery",
                     title = "Battery saver: No restrictions",
-                    detail = "Pick App Blocker and set it to \"No restrictions\".",
+                    detail = "Pick Keel and set it to \"No restrictions\".",
                     intents = listOf(
                         component("com.miui.powerkeeper", "com.miui.powerkeeper.ui.HiddenAppsConfigActivity")
                             .putExtra("package_name", pkg)
-                            .putExtra("package_label", "App Blocker"),
+                            .putExtra("package_label", "Keel"),
                     ),
                 ),
             )
@@ -115,7 +115,7 @@ object OemBackground {
                 Step(
                     id = "oppo_autostart",
                     title = "Allow auto launch",
-                    detail = "Turn App Blocker on in the auto launch (or startup manager) list, and allow " +
+                    detail = "Turn Keel on in the auto launch (or startup manager) list, and allow " +
                         "background activity under its battery settings.",
                     intents = listOf(
                         component("com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity"),
@@ -129,7 +129,7 @@ object OemBackground {
                 Step(
                     id = "vivo_background",
                     title = "Allow background running",
-                    detail = "Turn on autostart for App Blocker, and allow high background power use " +
+                    detail = "Turn on autostart for Keel, and allow high background power use " +
                         "under Battery.",
                     intents = listOf(
                         component("com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity"),
@@ -142,7 +142,7 @@ object OemBackground {
                 Step(
                     id = "huawei_launch",
                     title = "Manage app launch by hand",
-                    detail = "Find App Blocker, turn off \"Manage automatically\", and leave auto-launch, " +
+                    detail = "Find Keel, turn off \"Manage automatically\", and leave auto-launch, " +
                         "secondary launch and run in background all on.",
                     intents = listOf(
                         component("com.huawei.systemmanager", "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"),
@@ -155,7 +155,7 @@ object OemBackground {
         } + Step(
             id = "recents_lock",
             title = "Lock it in Recents",
-            detail = "Open Recents, tap App Blocker's icon above its card, and pick Lock or Keep open " +
+            detail = "Open Recents, tap Keel's icon above its card, and pick Lock or Keep open " +
                 "where your phone offers it. Phones with a task cleaner skip locked apps.",
             intents = emptyList(),
         )

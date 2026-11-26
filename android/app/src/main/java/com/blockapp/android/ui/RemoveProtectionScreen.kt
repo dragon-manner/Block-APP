@@ -45,7 +45,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.blockapp.android.BlockApplication
 import com.blockapp.android.admin.DeviceAdminHelper
-import com.blockapp.android.data.BlockedAppEntity
+import com.blockapp.android.sync.Policy
+import androidx.compose.runtime.collectAsState
 import com.blockapp.android.ui.theme.StatusColors
 import kotlinx.coroutines.flow.collectLatest
 
@@ -72,17 +73,12 @@ fun RemoveProtectionScreen(onDone: () -> Unit) {
     val context = LocalContext.current
     val app = context.applicationContext as BlockApplication
 
-    // null until Room answers. The empty list it used to start on showed the removal form for a
-    // moment even with a lock running.
-    var loadedLocks by remember { mutableStateOf<List<BlockedAppEntity>?>(null) }
-    val locks = loadedLocks.orEmpty()
+    // Live, so the screen opens up the moment a focus round ends or a lockdown is worked off.
+    val policy by Policy.state.collectAsState()
+    val locked = policy != null && Policy.hardLocked()
     var isAdminActive by remember { mutableStateOf(DeviceAdminHelper.isAdminActive(context)) }
     var confirmText by remember { mutableStateOf("") }
     var justRemoved by remember { mutableStateOf(false) }
-
-    LaunchedEffect(Unit) {
-        app.repository.activeEntities.collectLatest { loadedLocks = it }
-    }
 
     Scaffold(
         topBar = {
@@ -107,20 +103,16 @@ fun RemoveProtectionScreen(onDone: () -> Unit) {
                 // Locks first: with admin already off (Safe Mode, say) a running lock still keeps
                 // Accessibility guarded, so the admin-off branch's settings button would only
                 // bounce.
-                locks.isNotEmpty() -> {
+                locked -> {
                     StatusCard(
                         tone  = StatusColors.Warning,
                         icon  = Icons.Filled.Lock,
-                        title = "You have ${locks.size} active " +
-                            "lock${if (locks.size == 1) "" else "s"}.",
-                        body  = "Protection can't be removed while a lock is running, from here " +
-                            "or from Android's settings. That's the point of it. Wait the locks " +
-                            "out, or use an unlock key, then come back here.",
+                        title = if (policy?.lockdown == true) "A lockdown is running." else "A focus round is running.",
+                        body  = "Protection can't be removed during a focus round or a lockdown, " +
+                            "from here or from Android's settings. That's the point of it. " +
+                            "Finish the round, or the overdue task, then come back here. " +
+                            "Daily limits alone never stop you removing it.",
                     )
-                    Spacer(Modifier.height(12.dp))
-                    locks.forEach { lock ->
-                        LockLine(lock)
-                    }
                     Spacer(Modifier.height(16.dp))
                     OutlinedButton(
                         onClick  = onDone,
@@ -188,15 +180,15 @@ fun RemoveProtectionScreen(onDone: () -> Unit) {
                     Spacer(Modifier.height(12.dp))
                     Button(
                         onClick = {
-                            // Re-read rather than trusting the list on screen: a lock started
-                            // in another window since it was drawn must still win.
-                            if (app.repository.activeLocks.value.isEmpty()) {
+                            // Re-read rather than trusting what's on screen: a focus round
+                            // started on another device since it was drawn must still win.
+                            if (!Policy.hardLocked()) {
                                 DeviceAdminHelper.removeAdmin(context)
                                 isAdminActive = false
                                 justRemoved = true
                             }
                         },
-                        enabled  = confirmText == CONFIRM_PHRASE && loadedLocks != null,
+                        enabled  = confirmText == CONFIRM_PHRASE,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(52.dp),
@@ -243,30 +235,5 @@ private fun StatusCard(tone: Color, icon: ImageVector, title: String, body: Stri
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-    }
-}
-
-/** Names the locks standing in the way, so "end your locks first" is actionable rather than vague. */
-@Composable
-private fun LockLine(lock: BlockedAppEntity) {
-    val context = LocalContext.current
-    val identity = remember(lock.packageName) { loadAppIdentity(context, lock.packageName) }
-    Row(
-        modifier          = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            identity.label,
-            style      = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Medium,
-            modifier   = Modifier.weight(1f),
-        )
-        Text(
-            "until ${formatUnlockAt(lock.blockUntil)}",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }

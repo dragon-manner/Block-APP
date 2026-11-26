@@ -24,7 +24,7 @@ import com.blockapp.android.R
  * process in the background the moment it's not visible; when that happens, enforcement stops
  * silently until the system gets around to rebinding the accessibility service, which can take
  * long enough that a "closed" blocked app reopens clean. Only BlockApplication starts/stops
- * this, by observing BlockRepository.activeLocks — never call start/stop from UI code directly,
+ * this, by observing Policy.armed() — never call start/stop from UI code directly,
  * or it'll fight with that observer.
  */
 class BlockGuardService : Service() {

@@ -23,7 +23,6 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import com.blockapp.android.data.BlockRepository
 import com.blockapp.android.util.ReelSettings
-import com.blockapp.android.util.Rewards
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -56,8 +55,10 @@ internal class ReelBubble(
     private val service: AccessibilityService,
     private val repository: BlockRepository,
     private val scope: CoroutineScope,
-    /** Today's reel limit (util/ReelLimit), or null. With one set, the pill reads "87/100". */
+    /** Today's shared reel limit (sync/Policy), or null. With one set, the pill reads "87/100". */
     private val limitProvider: () -> Int?,
+    /** Reels other devices counted today, so the pill shows the account's total, not the phone's. */
+    private val elsewhereProvider: () -> Int,
 ) {
     private val windowManager = service.getSystemService(WindowManager::class.java)
     private val density = service.resources.displayMetrics.density
@@ -212,17 +213,17 @@ internal class ReelBubble(
 
     // A glyph and a bare number, so there's nothing to translate or reorder.
     @SuppressLint("SetTextI18n")
-    private fun render(total: Int) {
+    private fun render(phoneTotal: Int) {
         val text = label ?: return
         val limit = limitProvider()
+        val total = phoneTotal + elsewhereProvider()
         val figure = when {
             limit == null -> "$total"
             ReelSettings.pillFormat(service) == ReelSettings.Format.LEFT -> "${(limit - total).coerceAtLeast(0)} left"
             ReelSettings.pillFormat(service) == ReelSettings.Format.BARE -> "$total"
             else -> "$total/$limit"
         }
-        // The glyph is a reward the user picked (util/Rewards); Play until they have one.
-        val glyph = Rewards.glyph(service).text
+        val glyph = GLYPH
         text.text = SpannableString("$glyph $figure").apply {
             setSpan(
                 ForegroundColorSpan(GLYPH_COLOR),
@@ -337,6 +338,9 @@ internal class ReelBubble(
         /** Graphite at ~88% opacity, so it reads over both a bright video and a dark one. */
         const val BUBBLE_COLOR = 0xE00E0F0C.toInt()
         const val STROKE_COLOR = 0x33FFFFFF
+
+        /** Before the figure: a play mark, which reads as "videos" without any words. */
+        private const val GLYPH = "▶"
 
         /** From this share of the limit on, the pill rests on [NEAR_LIMIT_COLOR]. */
         const val NEAR_LIMIT_SHARE = 0.9f

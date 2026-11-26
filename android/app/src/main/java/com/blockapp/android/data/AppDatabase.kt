@@ -40,7 +40,7 @@ abstract class AppDatabase : RoomDatabase() {
          * v2 adds reel_counts. The SQL must match what Room generates for [ReelCountEntity]
          * column for column (types, NOT NULL, primary-key order) — Room validates the table
          * after migrating and throws at open on any mismatch, and a DB that won't open means
-         * activeLocks never populates and lock enforcement silently stops (CLAUDE.md
+         * the app crashes at start and enforcement silently stops (CLAUDE.md
          * invariant 7). Copied from createAllTables in the generated AppDatabase_Impl.
          */
         private val MIGRATION_1_2 = object : Migration(1, 2) {

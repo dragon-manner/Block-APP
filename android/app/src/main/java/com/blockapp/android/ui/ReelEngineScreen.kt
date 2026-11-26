@@ -35,7 +35,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.blockapp.android.util.ReelApps
-import com.blockapp.android.util.ReelLimit
 import com.blockapp.android.util.ReelSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -49,11 +48,9 @@ import kotlinx.coroutines.withContext
  * can't hit the limit, so an immediate off would be an in-app way round it.
  */
 @Composable
-fun ReelEngineScreen(onBack: () -> Unit, onPlan: () -> Unit, onRewards: () -> Unit) {
+fun ReelEngineScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     var version by remember { mutableIntStateOf(0) }
-    var editingLimit by remember { mutableStateOf(false) }
-    var limit by remember { mutableStateOf(ReelLimit.todayLimit(context)) }
 
     // Only the tracked apps that are installed: the list has 26 entries, most of them regional.
     val installed by produceState<List<String>?>(initialValue = null) {
@@ -67,16 +64,6 @@ fun ReelEngineScreen(onBack: () -> Unit, onPlan: () -> Unit, onRewards: () -> Un
                 }
             }.sortedBy { com.blockapp.android.util.InstalledAppsProvider.label(context, it).lowercase() }
         }
-    }
-
-    if (editingLimit) {
-        ReelLimitDialog(
-            onDismiss = { editingLimit = false },
-            onDone = {
-                editingLimit = false
-                limit = ReelLimit.todayLimit(context)
-            },
-        )
     }
 
     Column(
@@ -179,8 +166,6 @@ fun ReelEngineScreen(onBack: () -> Unit, onPlan: () -> Unit, onRewards: () -> Un
                                 }
                             }
                             Spacer(Modifier.height(12.dp))
-                            SecondaryButton("Pill glyphs you've unlocked", onClick = onRewards, modifier = Modifier.fillMaxWidth())
-                            Spacer(Modifier.height(8.dp))
                             Text(
                                 "Changes show the next time the pill appears.",
                                 style = MaterialTheme.typography.bodySmall,
@@ -233,21 +218,6 @@ fun ReelEngineScreen(onBack: () -> Unit, onPlan: () -> Unit, onRewards: () -> Un
                 }
             }
 
-            Spacer(Modifier.height(24.dp))
-            Reveal(3) {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SecondaryButton(
-                        when (limit) {
-                            null -> "Set a limit"
-                            0 -> "Limit: none"
-                            else -> "Limit: $limit"
-                        },
-                        onClick = { editingLimit = true },
-                        modifier = Modifier.weight(1f),
-                    )
-                    PrimaryButton("Reel plan", onClick = onPlan, modifier = Modifier.weight(1f))
-                }
-            }
             Spacer(Modifier.height(32.dp))
         }
     }
