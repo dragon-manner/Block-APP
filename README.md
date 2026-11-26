@@ -1,151 +1,116 @@
-# App Blocker
+# Keel
 
-Pick an app, lock it for a set duration, and there's no in-app way to unlock or uninstall it
-early. The only early-exit path is an offline signed "unlock key" you (the developer) generate
-on your own machine.
+One account across your phone, laptop and browsers. Keel tracks screen time on all of them,
+enforces **one** set of limits everywhere, and adds focus sessions, deadlines with real
+consequences, and rewards for keeping steady.
 
-## What's actually enforced, and what isn't
+Set a 30-reel limit on your phone, watch 30 Shorts in the YouTube app, and the 31st Reel on
+Instagram in your laptop's browser is walled. Start a focus session on the laptop, and your
+phone closes Instagram until the round ends.
 
-This runs as a normal app on a regular, already-set-up phone (no factory reset / Device Owner
-provisioning). That means real limits apply:
-
-- **Locked apps**: detected via an Accessibility Service and bounced to the home screen the
-  instant they come to the foreground. Effective as long as the service stays enabled.
-- **Uninstalling the blocker itself**: registering as a Device Admin means Android requires
-  deactivating admin *before* uninstall is even offered — a real, deliberate extra step, with a
-  custom warning shown in the system's confirmation dialog.
-- **Reaching the screens that would undo the above**: while a lock is active, the Accessibility
-  Service also bounces out of Settings' Accessibility screen (the one place it could be silently
-  disabled with no confirmation dialog), the Device Admin list/detail screen (first step toward
-  deactivating admin), and this app's own App Info / uninstall screens. Only guarded while a lock
-  is actually running — otherwise all of these are freely reachable, same as any app.
-- **What this does NOT do**: guarantee it's impossible to escape. All of the bounce-back tricks
-  above are best-effort, not a guarantee — a determined user can still get to Settings →
-  Accessibility and disable the service, deactivate Device Admin and uninstall, or boot into Safe
-  Mode (which disables all 3rd-party accessibility services). There's no way around this without
-  Device Owner mode, which requires provisioning a factory-reset device via ADB — not applicable
-  here since this runs on a daily-driver phone.
-
-In short: strong deterrent against impulsive unlocking, not a cryptographic guarantee against a
-determined bypass.
-
-## Project layout
-
-- `app/` — the Android app (Kotlin, Jetpack Compose, Room, minSdk 26).
-- `keygen/` — standalone Python scripts you run on your own PC to mint unlock keys. Never ships
-  inside the app.
-
-## One-time setup
-
-1. **Generate the signing keypair** (already done once in this repo — `keygen/keys/private_key.pem`
-   exists and its public key is already embedded in
-   `app/src/main/java/com/blockapp/android/keys/PublicKeyProvider.kt`). If you ever need to
-   rotate it: delete `keygen/keys/private_key.pem`, run
-   `python3 keygen/generate_keypair.py`, and paste the printed public key into
-   `PublicKeyProvider.kt`.
-   - Requires the `cryptography` package: `pip install cryptography` (already installed here).
-   - **Keep `keygen/keys/private_key.pem` secret.** It's the only thing that can produce a valid
-     unlock key. It's already excluded via `.gitignore`.
-
-2. **Build and install the release build** with the phone connected over USB:
-   `./gradlew installRelease`. Use this rather than the debug build: the debug build is
-   unoptimised and noticeably laggy. The release build is signed with the local debug key, so it
-   needs no keystore and installs over a debug install without losing data.
-
-3. **First launch** asks five questions about your scrolling and builds a reel plan (or skip it).
-   Then setup walks you through the permissions:
-   - Enable the Accessibility Service.
-   - Activate Device Admin.
-   - Allow the app to ignore battery optimizations (so it doesn't get killed in the background).
-
-## Locking an app
-
-Today tab → **Lock an app** → pick an app → pick a duration → confirm. (Or tap the lock icon
-next to any app in your screen-time list.) It disappears from
-the active list on its own once the timer expires (handled by an exact alarm, re-armed on
-reboot).
-
-## Reels counter
-
-The Today tab shows how many short-form videos (Reels, Shorts, TikToks, Reddit/LinkedIn video
-feeds, …) you've swiped through today, roughly how long you spent on them, and the top few apps.
-History has the per-app breakdown for any day, week or month. It reads screen events from the same
-Accessibility Service, only counts, never blocks anything, and stays on the phone like
-everything else.
-
-It works on Android 9+ and only watches short-video apps (Instagram, YouTube, TikTok, Snapchat,
-Facebook, Reddit, LinkedIn, X, Pinterest and a few more, listed in `util/ReelApps.kt`). Browsers,
-galleries and everything else are never counted, however much their scrolling looks like reels. In
-apps that also show photos full-screen (Reddit, LinkedIn, X, Pinterest, Tumblr) a reel only counts
-while a video player is on screen. It recognises a reel viewer two ways. The
-first is the app's video pager (a full-screen page per video, as in Instagram Reels). The
-second is what every short-video viewer draws: a column of like / comment / share buttons down
-the right edge, which feeds never have. That second way is what covers YouTube Shorts, TikTok,
-Facebook and the rest. Either way it's picked up on the first video, before you swipe, and a
-new reel is spotted when the caption and username change.
-
-- Rewatching (swiping back, then forward again) doesn't count a reel twice.
-- Coming back to the same reel (from comments, the notification shade, another app) doesn't
-  count it again.
-- Time is the gap between reels, capped at 3 minutes per reel, so a phone left on one video
-  doesn't log an hour.
-- A viewer whose pages don't fill the screen (peeking previews) won't be counted.
-
-Treat it as a rough daily signal, not an exact tally. To see why something did or didn't count,
-run `adb logcat -s ReelTracker` while scrolling.
-
-While you're in a reel viewer, the same total also floats in a tiny bubble at the top of the
-screen, just right of the front camera, and hops each time it goes up. It disappears when you
-leave the viewer, switch apps, or turn the screen off. It can't be tapped, so it never gets in
-the way of the app underneath.
-
-## Reel plan
-
-The first-launch quiz asks which apps get you, how many reels and how much time a day, when it's
-hardest to stop, and what you want (cut down gently, cut down fast, or quit reels). From that it
-builds a plan: a daily limit that starts a little under your own estimate and steps down each
-week to a goal, plus optional **reel-free hours** (for example 11 PM – 7 AM) during which any reel
-viewer is closed straight away. If you watch noticeably fewer reels than planned for three days,
-the limit follows you down early. The plan never loosens on the day: stopping it, or rebuilding
-it with gentler answers, only takes effect tomorrow. Today tab → the plan strip, or Settings →
-Reel plan.
-
-## Daily reel limit
-
-Today tab → **Set a limit** on the reels card (or Settings → Daily reel limit). Pick None (no reels at
-all), 25, 50, 100, 150, 200 or a custom number. A running reel plan sets this for you each week. The bubble then reads "87/100" and turns red near the end,
-and at 10 to go you get a heads-up. When you hit it, any reel viewer you open is closed with
-Back and a "Reel limit reached" screen stays up until midnight. The rest of each app keeps
-working.
-
-Lowering the limit applies immediately. Raising it or turning it off only applies from the
-next day, so it can't be lifted on impulse.
-
-## Screen time and history
-
-The History tab shows time per app, an hour-by-hour chart, how many times each app was opened,
-phone unlocks and reels, for any day since install. Switch between Day, Week and Month, and tap any
-day on the month calendar or any bar in the week to open it. Android itself only keeps about a
-week of usage data, so the app saves each day as it goes. Android's own backup (to your Google
-account) includes that history and the reel plan, so both come back after an uninstall and
-reinstall. Running locks come back too. This needs **Usage access** (Settings →
-Special app access), which only reads how long apps were in front. Tap the lock icon on any app
-row to lock that app straight away.
-
-## Generating an unlock key
-
-From your PC, once `keygen/keys/private_key.pem` exists:
-
-```bash
-# Unlock a specific package immediately
-python3 keygen/generate_key.py com.instagram.android now
-
-# Push a specific package's unlock time out by 2 more hours instead of lifting it
-python3 keygen/generate_key.py com.instagram.android 2
-
-# Unlock everything immediately
-python3 keygen/generate_key.py "*" now
+```
+ Android app ─┐                         ┌─ Desktop app (Linux / Windows)
+ (reel engine,│   HTTPS + WebSocket     │  (active-window tracking,
+ a11y blocker)├────── keel-server ──────┤   closes blocked apps)
+              │   (Go, SQLite, ~12MB)   │        │ 127.0.0.1:47321
+ Web dashboard┘                         └─ Browser extension
+                                            (counts reels, walls sites)
 ```
 
-Paste the printed key into the app's "Enter unlock key" screen. Each key can only be applied
-once (replay-protected via a nonce stored in the local database).
+## What it does
+
+- **Combined screen time.** Every device reports its day; Today and Insights show the total,
+  split by device, app/site, category and hour. Day, week and month views, compared with the
+  previous period. A "YouTube" target is the Android app, youtube.com and any desktop client at
+  once (`shared/catalog.json`).
+- **Shared limits.** A daily reel limit counted across the phone and every browser, per-app time
+  limits that share one budget across devices, nightly quiet hours, and an optional taper that
+  steps the reel limit down each week. **Tighter changes apply now; looser ones wait until
+  tomorrow**, so the limit can't be switched off in the moment it matters.
+- **Focus.** Deep focus or Pomodoro, started from any device, enforced on all of them. Each
+  finished session plants a procedurally grown tree in your **Grove**; giving up withers it.
+  Strict mode closes distracting apps and sites; soft mode lets you open them but withers the
+  tree after 10 seconds.
+- **Tasks with consequences.** Give tasks deadlines. Finish on time for coins. Miss one and you
+  lose coins and reels off today's allowance, and (by default) a **lockdown** closes social,
+  video, games, news and shopping on every device until you finish it or work it off with 25
+  focused minutes. Pushing a deadline back costs coins; an overdue task can't be moved or
+  deleted.
+- **Rewards.** Coins and XP from focus, tasks, clean days and streaks. Spend them on +5 reels,
+  a 15-minute breather from app limits, forgiveness for an overdue penalty, or a streak freeze.
+  Nothing for sale switches a limit off. Levels unlock accent colours.
+
+## Components
+
+| Path | What | Built with |
+| --- | --- | --- |
+| `server/` | Sync server: accounts, rules, usage, focus, tasks, economy, live push | Go, SQLite (pure Go), WebSocket |
+| `ui/` | The app's interface, shared by all three platforms and the web dashboard | Preact, TypeScript, Vite |
+| `desktop/` | Linux and Windows app: tracks the active window, closes blocked apps, tray | Tauri 2 (Rust) |
+| `extension/` | Chrome / Brave / Edge / Firefox: reels and site time, walls | Manifest V3 |
+| `android/` | Android app: reel engine, accessibility blocker, usage stats, sync | Kotlin, Compose, Room |
+| `shared/catalog.json` | Which packages, domains and desktop apps are the same target | JSON |
+| `deploy/` | systemd unit and deploy script for the VPS | |
+
+`make sync` copies the built UI and the catalog into the server, desktop and Android trees.
+
+## Setup
+
+### 1. Server (once)
+
+```bash
+./deploy/deploy.sh          # builds, copies to the `vps` ssh host, installs the systemd unit
+```
+
+It serves HTTPS on `https://144-31-38-244.sslip.io` with an automatic Let's Encrypt
+certificate (sslip.io maps the name to the IP, so no domain is needed). The first account to
+register owns the server; later sign-ups are refused unless it runs with `-open-signup`. The
+web dashboard is at the same address.
+
+Run it locally instead: `make server && ./dist/keel-server -addr :8080`.
+
+### 2. Android
+
+Install the APK from Releases (or `cd android && ./gradlew installRelease`), sign in, then walk
+the setup: Accessibility, Device admin, Usage access and battery. On a sideloaded install,
+Android 13+ greys out the Accessibility switch until "Allow restricted settings" is used;
+setup walks you through it.
+
+### 3. Linux / Windows
+
+Install the `.deb` / `.rpm` / `.AppImage` or the Windows installer from Releases, or build with
+`make desktop`. It starts with the computer and lives in the tray; closing the window hides it.
+Window tracking works on **Hyprland**, **X11**, **KDE Wayland** (needs `kdotool` from the AUR)
+and **Windows**. GNOME on Wayland gives apps no way to see the active window.
+
+### 4. Browser extension
+
+Chrome/Edge: `chrome://extensions` → Developer mode → Load unpacked → `extension/`.
+Brave on this machine: add `--load-extension=/path/to/Block-APP/extension` to
+`~/.config/brave-flags.conf`. Firefox: `about:debugging` → Load Temporary Add-on, or sign the
+zip from Releases. The extension talks only to the Keel desktop app on `127.0.0.1:47321`; with
+the desktop app closed it shows a "!" badge and nothing in that browser is counted.
+
+## How strong is it?
+
+Keel makes giving in harder, not impossible. On Android the accessibility service closes
+blocked apps and Device Admin stops a two-tap uninstall; during a focus round or lockdown the
+Settings routes that would switch these off are guarded, and **Remove protection** inside the
+app refuses until it's over. Outside those times Remove protection always works. Safe Mode
+still disables everything. On the desktop, quitting from the tray waits out a focus round or
+lockdown, but killing the process works. Browser limits hold only with the extension installed
+and the desktop app running. That's the honest boundary: it removes the impulse path, not every
+path.
+
+## Development
+
+```bash
+make ui                         # build the shared UI
+cd ui && npm run dev            # UI dev server (set VITE_KEEL_SERVER=http://localhost:8080)
+make server && ./dist/keel-server -addr :8080 -open-signup
+cd desktop && npx tauri dev     # desktop app against the built UI
+cd android && ./gradlew assembleDebug   # debug builds may reach http://10.0.2.2 (the dev host)
+```
+
+CI (`.github/workflows/release.yml`) builds everything on each push; tagging `v*` publishes a
+release with the server binaries, desktop installers, APK and extension zip.

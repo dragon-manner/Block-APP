@@ -1,6 +1,5 @@
 *.iml
 .gradle/
-/local.properties
 .idea/
 .DS_Store
 build/
@@ -8,6 +7,20 @@ build/
 .externalNativeBuild
 .cxx
 local.properties
+node_modules/
+dist/
+target/
 
-# Keep the private signing key out of any repo this project ends up in.
+# The 1.x unlock-key signing key, if it still exists on this machine.
 keygen/keys/private_key.pem
+
+# Build copies made by `make sync` (the catalog copies stay tracked so each platform builds
+# on its own; the UI build doesn't).
+server/embed/web/*
+!server/embed/web/.gitkeep
+desktop/dist/
+desktop/src-tauri/gen/
+android/app/src/main/assets/ui/
+*.db
+*.db-wal
+*.db-shm

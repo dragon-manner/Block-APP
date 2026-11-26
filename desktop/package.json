@@ -1,0 +1,13 @@
+{
+  "name": "keel-desktop",
+  "private": true,
+  "version": "2.0.0",
+  "scripts": {
+    "tauri": "tauri",
+    "build": "tauri build",
+    "dev": "tauri dev"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0"
+  }
+}

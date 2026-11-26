@@ -4,51 +4,58 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-An Android app that lets a user lock a chosen app for a set duration, with no in-app way to
-unlock or uninstall it early. The only early-exit path is an offline-signed "unlock key" minted
-by the developer on their own PC via the `keygen/` scripts. It runs as a normal app on a regular
-phone (no Device Owner / factory-reset provisioning), so protection is enforced through an
-Accessibility Service + Device Admin, not the kernel.
+**Keel** (2.x; the repo is still Block-APP): one account across an Android phone, Linux/Windows
+computers and their browsers. Every device reports screen time to a small self-hosted server and
+enforces one synced rule set: a shared daily reel limit, per-target time limits sharing one
+budget across devices, quiet hours, focus/Pomodoro sessions started from anywhere, and tasks whose
+missed deadlines cost coins and reels and can lock distracting apps everywhere ("lockdown").
+Coins/XP/streaks reward the opposite. 1.x was a phone-only timed app locker with offline unlock
+keys; locks and keys are gone.
 
-This is a single-user personal tool, not a shipped product: there is no test suite, no CI, no
-crash reporting, and no analytics. Verification is manual, on a real device.
+Single-user personal tool: no test suite. Verification is manual (see "Verifying a change").
 
 ## Project layout
 
-- `app/` — the Android app (Kotlin, Jetpack Compose, Room, minSdk 26, compile/targetSdk 34).
-- `keygen/` — standalone Python scripts run on the developer's own machine to mint unlock keys.
-  Never ships inside the app. Requires `pip install cryptography`.
-  `keygen/keys/private_key.pem` is the signing key, is gitignored, and must never be committed,
-  pasted into a file under `app/`, or printed into any log.
+- `server/` — Go sync server (`keel-server`): SQLite via modernc (pure Go, static binary),
+  WebSocket push (`coder/websocket`), HTTPS via `autocert`. Runs on a 1GB VPS; keep it lean.
+  `embed/` holds copies of the built UI and catalog (`make sync`).
+- `ui/` — the one UI (Preact + TS + Vite), used by the web dashboard, the desktop app and the
+  Android WebView. Platform differences go through `src/bridge.ts` only.
+- `desktop/` — Tauri 2 app (Rust in `src-tauri/src`): `tracker.rs` (active window per desktop),
+  `engine.rs` (accounting + verdicts), `sync.rs`, `ext.rs` (localhost bridge for the extension),
+  `model.rs` (enforcement contract + verdict logic).
+- `extension/` — MV3 extension (Chromium + Firefox). Relays to the desktop app; owns no state.
+- `android/` — the Android Gradle project (`android/app`, Kotlin/Compose/Room, minSdk 26,
+  compile/targetSdk 34). Package `com.blockapp.android` is kept so it installs over 1.x.
+- `shared/catalog.json` — targets: which Android packages, domains and desktop app ids are the
+  same thing ("youtube"), plus categories. Copied into server, desktop, Android, extension.
+- `deploy/` — systemd unit + `deploy.sh` for the VPS.
 
-Package layout under `app/src/main/java/com/blockapp/android/`: `accessibility/` (enforcement),
-`admin/` (Device Admin), `alarm/` (expiry + boot), `data/` (Room + repository), `keys/` (unlock-key
-verification), `service/` (keep-alive foreground service), `ui/` (Compose screens), `usage/`
-(screen-time stats), `util/` (package helpers).
+Android package layout under `android/app/src/main/java/com/blockapp/android/`:
+`accessibility/` (enforcement + reel engine), `admin/` (Device Admin), `alarm/` (daily archive +
+boot), `data/` (Room + repository), `service/` (keep-alive), `sync/` (server link, policy, catalog,
+JS bridge), `ui/` (the native screens left: setup, wall, Remove protection, reel engine), `usage/`
+(screen-time stats), `util/`.
 
 ## Commands
 
-The SDK is installed (`local.properties` → `~/Android/Sdk`, platform android-34) and the Gradle
-wrapper works from the command line, so a change can and should be compile-checked here before
-being called done. Running on a device still happens via Android Studio or `installRelease`.
-
 ```bash
-./gradlew assembleDebug        # build debug APK
-./gradlew installRelease       # build + install the fast build on a connected device
-./gradlew installDebug         # debug build, for the debugger only
-./gradlew lintDebug            # Android Lint → app/build/reports/lint-results-debug.sarif
-./gradlew clean                # clear build outputs
+make sync                      # build ui/ and copy it + the catalog into every platform
+make server                    # → dist/keel-server (embeds the UI)
+./dist/keel-server -addr :8080 -db keel.db [-open-signup]
+./deploy/deploy.sh             # build for linux/amd64 and install on the `vps` host
+cd ui && npm run build         # type-check + build the UI
+cd desktop/src-tauri && cargo check / cargo build --release   # needs desktop/dist (make sync)
+cd desktop && npx tauri build  # installers
+cd android && ./gradlew assembleDebug / installRelease / lintDebug
 ```
 
-A compile is *not* a verification of behaviour on this app — see "Verifying a change" below.
-
-**Put the release build on the phone, not the debug one.** A debuggable build runs Compose with no
-ahead-of-time compilation and no R8, and that was most of why the app felt laggy on a Pixel. The
-release type is minified, resource-shrunk (about 1.4MB against 21MB for debug), signed with the
-local debug key so it needs no keystore, and ships `src/main/baseline-prof.txt`, which
-`profileinstaller` applies on a sideload. Debug and release share a signature, so either installs
-over the other without losing data. Log calls are kept in release on purpose: the reel counter
-is debugged with `adb logcat -s ReelTracker` on the build that's actually installed.
+The Android release build is minified, resource-shrunk, signed with the local debug key, and
+ships `src/main/baseline-prof.txt`; put that one on the phone, not debug (debug is laggy).
+Debug builds may talk plain HTTP to `10.0.2.2` (`src/debug` network config + mixed content) so
+the emulator can reach a dev server; release is HTTPS only. `KeelBridge`'s
+`@JavascriptInterface` methods are kept by a rule in `proguard-rules.pro`; without it R8 strips
+them and every bridge call silently fails in release only.
 
 **KSP is pinned to the KSP1 backend** (`ksp.useKSP2=false` in `gradle.properties`, KSP
 `2.2.10-2.0.2` in the root `build.gradle.kts`). Room 2.6.1's processor crashes under KSP2 with
@@ -61,50 +68,55 @@ There are no unit or instrumentation tests, so there is no test command and noth
 single test against. Do not claim a change is "tested" — say what was built and what still needs
 manual on-device verification.
 
-Generating an unlock key (from a dev machine, once `keygen/keys/private_key.pem` exists):
-
-```bash
-python3 keygen/generate_key.py com.instagram.android now   # unlock a package immediately
-python3 keygen/generate_key.py com.instagram.android 2     # push its unlock time out 2h instead
-python3 keygen/generate_key.py "*" now                     # unlock everything immediately
-```
-
-Rotating the signing keypair (invalidates every key ever issued):
-
-```bash
-rm keygen/keys/private_key.pem
-python3 keygen/generate_keypair.py   # paste the printed public key into PublicKeyProvider.kt
-```
-
 ## Architecture
 
 **Dependency wiring is manual.** There is no DI framework. `BlockApplication` constructs the
-single `BlockRepository` and exposes it plus an `applicationScope`. Everything reaches it the same
+single `BlockRepository` and `KeelSync` and exposes them plus an `applicationScope`. Everything reaches it the same
 way — `context.applicationContext as BlockApplication` — from composables, services, and
 receivers alike. Keep that pattern; don't introduce a container.
 
-**Data flow.** `BlockRepository` (`data/`) is the single read/write entry point for lock state,
-shared by the UI, the accessibility service, and the alarm/boot receivers. It wraps Room
-(`AppDatabase`, `BlockDao`, `BlockedAppEntity`, `UsedNonceEntity`) and mirrors active locks into an
-in-memory `StateFlow<Map<packageName, blockUntil>>` (`activeLocks`) so the accessibility service can
-check the foreground app synchronously, without a DB hit, on every window event. Locks are
-soft-deleted (`active = 0`), never `DELETE`d.
+**The cross-device contract.** The server computes an `Enforce` object per *device*
+(`server/enforce.go`): rules plus usage split into `others` (every other device) and `mine`. A
+client adds its own live, unsynced count to `others`, so the device that watched reel 30 blocks
+reel 31 itself, without a round trip. Usage uploads are **absolute daily totals**, never deltas,
+so retries can't double count. The server pushes a bare `{"type":"changed"}` over WebSocket and
+clients refetch `/api/enforce`; a lost or reordered message can't leave stale rules applied.
+The verdict logic exists three times and must stay in lockstep: `desktop/src-tauri/src/model.rs`,
+`android/.../sync/Policy.kt`, and the explanation in `ui/src/lib.ts`.
 
-Two deliberate reads bypass the cache, and both have a reason recorded at the call site:
-`getActiveLockUntil()` (accessibility service just reconnected after a process death — the Flow
-may not have populated yet) and `getActiveOnce()` (receivers running before/outside the cache).
+**Rules only tighten today** (`server/rules.go` `tighten`): a change applies at once only as far
+as it is stricter; anything looser goes to `pending` and replaces the rules at the next day
+boundary. Removing a limit, raising one, shrinking quiet hours, lowering a penalty, turning
+lockdown or a taper off, or moving a target out of a distracting category are all loosenings.
+`PUT /api/rules` decodes onto tomorrow's rules so partial updates don't zero fields.
+
+**Consequences and rewards** live in `server/enforce.go` and `api.go`, serialised by
+`Server.mu`. Overdue tasks are penalised once (`penalized`), and with `penalties.lockdown` the
+distracting categories are blocked everywhere until the task is done or a ≥25-min focus session
+clears the debt. Give-up after the 10s grace withers the tree and costs coins + reels. The day is
+settled by `rollover` (clean day → coins + streak; freezes protect streaks; a day no device
+reported is `nodata` and neutral). Shop items never switch a limit off.
+
+**Android: Policy is the source of truth for enforcement.** `KeelSync` (owned by
+`BlockApplication`) reports usage every 30s, pushes reel totals within ~400ms, listens on the
+socket, and writes each `Enforce` into `Policy`, which persists it in SharedPreferences and
+loads it at process start, so a reboot or OEM kill mid-focus enforces before the network is
+back. `Catalog` maps packages to targets. `KeelBridge` is `window.KeelAndroid` for the WebView UI
+(`MainActivity`, assets served via `WebViewAssetLoader`); it hands the session to `KeelSync`.
 
 **Enforcement is two-tiered**, both in `AppBlockAccessibilityService` (`accessibility/`):
 
-- *Tier 2 — locks.* A locked package reaching the foreground is kicked home via
-  `performGlobalAction(GLOBAL_ACTION_HOME)` and `BlockOverlayActivity` is shown
-  `OVERLAY_DELAY_MS` later. HOME runs asynchronously and used to land on top of a wall started
-  at the same moment, so the wall was never seen. Don't fold the start back into the same
-  instant. Two paths feed it: the live `onAccessibilityEvent` (`typeWindowStateChanged`, `notificationTimeout=0`) and a
-  200ms watchdog poll (`WATCHDOG_INTERVAL_MS`) that runs *only* while `activeLocks` is non-empty.
-  The watchdog exists because window-state events get coalesced or dropped under rapid
-  open/close taps, and a single missed event otherwise means the app stays open indefinitely —
-  the "blocking stops working after a while" bug.
+- *Tier 2 — the policy.* `checkForeground` maps the package to a target and asks
+  `Policy.verdict` (strict focus work phase → category; lockdown → category; quiet hours →
+  category; per-target limit with `others + local` seconds, local = last report + the live part
+  of this session). A blocked package is kicked home via `performGlobalAction(GLOBAL_ACTION_HOME)`
+  and `BlockOverlayActivity` is shown `OVERLAY_DELAY_MS` later with the reason (HOME runs
+  asynchronously and used to land on top of a wall started at the same moment). Two paths feed
+  it: the live `typeWindowStateChanged` event and a 500ms watchdog that runs only while
+  `Policy.armed()`, because window-state events get dropped under rapid taps. Never blocked: this
+  app, `ProtectedPackages`, launchers, keyboards, System UI. Soft focus doesn't block; holding a
+  distraction 10s reports a violation (the server withers the tree). The wall finishes itself
+  once the live policy no longer blocks.
 - *Tier 1 — self-protection.* Once Device Admin is active, the service also bounces the user out
   of Settings' Accessibility screens, the Device Admin list/detail screens, this app's own App
   Info / uninstall screens, and the Play Store uninstall flow — matched by package
@@ -120,8 +132,8 @@ may not have populated yet) and `getActiveOnce()` (receivers running before/outs
   on a Deactivate tap, before its confirm dialog, and `removeActiveAdmin` never calls) asks the
   live service to press BACK + HOME (`repelAdminDeactivation`) and, mid-lock, `lockNow()`s.
 
-Tier 1 has two levels (`Guard`). FULL once Device Admin is active. LOCKED while a lock runs
-without admin (admin removed from Safe Mode, or a lock started before setup finished): it guards
+Tier 1 has two levels (`Guard`). FULL once Device Admin is active. LOCKED while `Policy.hardLocked()`
+(strict focus work phase or lockdown) without admin (admin removed from Safe Mode, say): it guards
 Accessibility, App info and uninstall but **leaves the Device Admin pages alone**, since
 re-activating admin is the one setup step still possible with the service running. The admin
 gate is load-bearing: Accessibility must be enabled *before* Device Admin can be activated, so an
@@ -200,43 +212,12 @@ must not reach the service (see `BlockRepository.addReelsWatched` and the guards
 Requires API 28 (`scrollDeltaY`). Every decision is logged under `adb logcat -s ReelTracker` for
 on-device debugging.
 
-**The reel plan** (`util/ReelPlan`) is what the onboarding quiz (`QuizScreen`, shown once on
-first launch, `ReelPlan.quizSeen`) builds: a weekly step-down from just under the user's own
-estimate to a goal, plus optional reel-free hours. `ReelPlan.build` is pure. `ReelPlan.refresh`
-writes the day's step into `ReelLimit`, and only ever lowers it. It follows the user down early
-once three complete days average well under the schedule (`limitFor`). It runs on process
-start (deferred 4s), on Home resume, from the daily `UsageArchiveReceiver` alarm, and at
-midnight from the service. Stopping the plan and narrowing reel-free hours, including by
-retaking the quiz, take effect *tomorrow*. Otherwise "retake the quiz with gentler answers"
-would be an in-app off switch. The plan lives in SharedPreferences (`reel_plan`), like
-`ReelLimit`, including the user's own reason (`why`, read back on the reel wall) and their
-alternatives. Steps are a geometric curve (each week keeps `Goal.weeklyKeep` of the last), and
-the number of weeks comes from the pace, not a fixed table.
-
 **Reel engine settings** (`util/ReelSettings`, prefs `reel_settings`, `ReelEngineScreen`): which
 of `ReelApps.KNOWN` are counted, the pill's visibility, side (`Gravity.END` for left of camera)
 and wording, and the "reels left" warning distance (0 = off) and buzz. **Switching an app's
 counting off waits until tomorrow; on is immediate**, the same tighten-only rule as `ReelLimit`,
 because an uncounted app can't reach Tier 3. The service hands the tracker one live `Set` whose
 contents it swaps on a prefs listener and at midnight; never widen it past `KNOWN`.
-
-**Rewards** (`util/Rewards`, prefs `rewards`, `RewardsScreen` "Make it yours"): accents, pill
-glyphs, a wall line of the user's own (shown on every wall, and on reel walls without a plan
-reason), a nickname, XP levels, and one easter egg (7 quick taps on the level badge → Mono
-accent). Earned from `PlanProgress.Summary` plus apps ever locked, synced on Home and on the
-screen; **earned stays earned** and the level uses best-ever XP, so a broken streak or rebuilt plan
-never takes anything back. Every reward is cosmetic or adds friction; never add one that loosens.
-The accent lives in `ui/theme/Accent.kt`: `Lime`/`LimeInk`/`LimeWash` in `Color.kt` are
-*getters* over `AccentState.current` (Compose state), so never capture them in a top-level `val`.
-
-**The plan's scorekeeping** is `util/PlanProgress`, pure, over `reel_counts` plus `plan_days`
-(schema v5, `PlanDayEntity`): each day's limit as it stood, how many times Tier 3 closed a viewer
-(limit vs reel-free hours), and whether the service ran that day (`tracked`). A *clean* day is
-within the limit with no wall at all, because the wall makes "under the limit" near-automatic. An
-untracked day is `NO_DATA`: it never extends or breaks a streak and adds nothing to "reels
-skipped". Today is never scored. The service writes `tracked` on connect and at midnight,
-`ReelPlan.refresh` writes the day's limit, `enforceReelLimit` records each wall. `PlanScreen`,
-Home's plan card and the reel wall all read `BlockRepository.observePlanProgress`.
 
 `ReelBubble` is its on-screen half: a tiny `TYPE_ACCESSIBILITY_OVERLAY` pill beside the camera
 cutout showing today's total. It is shown for exactly as long as the tracker has a session open.
@@ -291,85 +272,48 @@ screens, tried in order, ending on App info. They can't be read, so the user tic
 `SYSTEM_ALERT_WINDOW` is declared as an optional extra purely for its exemption from background
 activity/FGS start limits; nothing is drawn with it.
 
-**The only sanctioned way out** is `RemoveProtectionScreen`, which calls
-`DeviceAdminHelper.removeAdmin()` in-process — an app may always drop its own admin without
-touching Settings UI, so this path never needs the screens Tier 1 blocks. **It refuses while any
-lock is running** (checked first, and re-checked against `activeLocks` at the tap): "can't be
-uninstalled mid-lock" is the app's selling point. Mid-lock the exits are the timer, an unlock key,
-or Safe Mode.
+**The only sanctioned way out** is `RemoveProtectionScreen` (reached from the setup header and
+from the hub: Devices → This phone → Remove protection), which calls
+`DeviceAdminHelper.removeAdmin()` in-process. **It refuses only while `Policy.hardLocked()`**
+(strict focus round or lockdown); both end on their own. Daily limits alone never block it.
 
-**`ProtectedPackages`** (`util/`) is the single source of truth for packages that must never be
-lockable: Settings variants across OEMs, package installers, Play Store. It is enforced twice on
-purpose — `InstalledAppsProvider` excludes them from the picker, and `BlockRepository.lockApp`
-refuses them as a backstop — because locking any of them would make Tier 2 bounce the very screens
-setup and removal depend on.
+**Process keep-alive.** `BlockApplication` starts/stops `BlockGuardService` as `Policy.armed()`
+flips, **debounced 300ms**. Only `BlockApplication` may start or stop it.
 
-**Process keep-alive.** `BlockApplication` starts/stops `BlockGuardService` (a `specialUse`
-foreground service) as `activeLocks` becomes non-empty/empty, **debounced 300ms**
-(`SERVICE_TOGGLE_DEBOUNCE_MS`). Its only job is holding the process at foreground priority so the
-bound accessibility service isn't killed by an OEM battery manager mid-lock. Only
-`BlockApplication` may start or stop it — calling `BlockGuardService.start/stop` from UI code
-fights that observer.
+**Desktop.** A 1s sampler thread asks `tracker.rs` for the active window (Hyprland IPC socket;
+Hyprland 0.55+ Lua configs need `hl.dsp.window.close({ window = "address:…" })`, older ones
+`closewindow`; X11 via xdotool; KDE Wayland via kdotool; Win32), skips idle (>5 min), attributes
+browser time to the extension's focused-tab domain, and on a blocked verdict asks the window to
+close (never kills) and shows `block.html` full-screen for 6s. Browsers are never closed; the
+extension walls the tab. Tray Quit waits out focus/lockdown. Reverse-DNS classes
+(`org.kde.kcalc`) are normalised to their last part so targets match the Windows exe name.
+State (session, today's usage, last enforcement) lives in `~/.local/share/keel` / `%APPDATA%`.
 
-**Expiry is defence-in-depth, and Room's `blockUntil` is the only source of truth.** Alarms are a
-convenience that can be missed (exact-alarm permission revoked, process force-stopped, clock jump),
-so expiry is swept from three places: `AlarmScheduler`'s exact alarm (falling back to an inexact
-alarm rather than throwing), `BootCompletedReceiver` (re-arms alarms after reboot), and
-`expireAllDue()` on every process start plus every `HomeScreen` resume. Enforcement never depends
-on an alarm firing.
-
-**Unlock keys** (`keys/KeyVerifier.kt` ⟷ `keygen/generate_key.py`). Format:
-`base64url(payload) + "." + base64url(signature)`, where payload is
-`"packageName|newUnlockEpochMillis|nonce"` signed `SHA256withRSA` / PKCS#1 v1.5. The app holds only
-the public key (`PublicKeyProvider.kt`). Nonces are single-use, recorded in `used_nonces`, so a key
-cannot be replayed. `newUntil <= now` means "unlock now"; a future value *extends* the lock instead.
-Target `"*"` applies to all active locks. The two sides are one wire format across two languages:
-change one and you must change the other in lockstep — including the Base64 padding detail called
-out in `generate_key.py`.
+**Extension bridge** (`ext.rs`, 127.0.0.1:47321) only answers requests carrying an
+`X-Keel-Ext` header from extension origins, so a web page can't spoof reel counts. Reel ids are
+de-duplicated per day; a reel opened over the limit is walled, not counted.
 
 ## Invariants that must not break
 
-Ordered by how bad it is to get wrong. The first one can force a factory reset.
-
-1. **The escape hatch must always work once no lock is running.** While Tier 1 is armed and
-   nothing is locked, `RemoveProtectionScreen` → `DeviceAdminHelper.removeAdmin()` is the user's
-   *only* way to regain access to Accessibility and Device Admin settings. (Mid-lock it refuses by
-   design; the lock's own expiry is what reopens it, so every lock must keep expiring.) If a change crashes that screen, hides it, or leaves it unreachable
-   from `HomeScreen`, a locked-out user's remaining options are an unlock key from the dev machine
-   or Safe Mode. Any change touching `RemoveProtectionScreen`, `MainActivity`'s navigation, or
-   `removeAdmin()` must be verified on-device *with Device Admin actually active*.
-2. **Never make Tier 1 unconditional** or otherwise arm it before Device Admin is active — it
-   makes first-time setup impossible to complete (see above).
-3. **Never lock a package in `ProtectedPackages`**, and keep both enforcement points intact.
-4. **A lock may only ever be extended, never shortened — except by an unlock key.** `BlockDao.insert`
-   is `OnConflictStrategy.REPLACE`, so `BlockRepository.lockApp` merges against any existing active
-   lock (`maxOf` on `blockUntil`, original `blockedAt` preserved) instead of overwriting it.
-   Without that merge, re-locking an already-locked app for a shorter time from the app picker
-   ends the running lock early — a fully in-app early exit, which is the one thing this app
-   exists to prevent. `applyUnlockKey` is the only path allowed to bring a `blockUntil` forward,
-   because those keys can only be minted off-device.
-5. **Keep Tier 1's class-name hints narrow.** They are `contains(ignoreCase = true)` substring
-   matches against Settings' activity names. A hint like `"Settings"` or `"App"` would bounce the
-   user out of most of the Settings app, taking the escape hatch with it. New hints should be
-   specific activity names, and ones matching screens shared by other apps must be paired with
-   `currentWindowMentionsSelf()`.
-6. **Don't remove the 300ms foreground-service debounce.** Reacting to every `activeLocks` emission
-   can start and stop the service faster than Android's start-up handshake completes, which kills
-   the whole process with `ForegroundServiceDidNotStartInTimeException`. This was hit in practice
-   at cold start when a stale expired lock flipped the flow non-empty→empty within milliseconds.
-7. **A Room schema change needs a version bump and a migration.** `AppDatabase` is `version = 5`
-   with `exportSchema = false` and **no** `fallbackToDestructiveMigration()`, so shipping a changed
-   schema without a migration throws at open — and on this app, a DB that won't open means
-   `activeLocks` never populates and enforcement silently stops. Migrations are hand-written SQL;
-   copy the `CREATE TABLE` from `createAllTables` in the generated `AppDatabase_Impl` rather than
-   writing it by hand, since Room validates the result column for column.
-8. **Don't add the `INTERNET` permission.** The manifest declares no network permission at all;
-   key verification is entirely offline and local. Zero network reach is a deliberate property of
-   the design, not an omission.
-9. **Never weaken a permission fallback into a crash.** An exception on a background path
-   (scheduling, verification, package lookup) can abort mid-lock and leave a lock active with no
-   expiry ever scheduled. Degrade instead — that is why `AlarmScheduler` falls back to an inexact
-   alarm and `KeyVerifier` returns `Invalid` for any malformed input.
+1. **The escape hatch must always work outside a focus round or lockdown.** With Tier 1 armed,
+   `RemoveProtectionScreen` → `removeAdmin()` is the only way back to Accessibility/Device Admin
+   settings. It must stay reachable from the hub and from setup, and every hard lock must end on
+   its own (focus rounds end at `ends`; lockdowns end when worked off). Verify on-device with
+   Device Admin active.
+2. **Never make Tier 1 unconditional** or arm it before Device Admin is active (setup breaks).
+3. **Never block a package in `ProtectedPackages`**, a launcher or this app.
+4. **Rules only tighten today.** Every new rule field needs a case in `tighten`, or it becomes an
+   in-app off switch. Same for anything sold in the shop.
+5. **Keep Tier 1's class-name hints narrow** (substring matches; see Code conventions).
+6. **Don't remove the 300ms foreground-service debounce** (ForegroundServiceDidNotStartInTime).
+7. **A Room schema change needs a version bump and a migration.** `AppDatabase` is `version = 5`,
+   no destructive fallback. The 1.x lock/nonce tables stay in the schema, unused.
+8. **The enforcement contract is shared.** Changing `Enforce` (server) means changing
+   `model.rs`, `Policy.kt` and `ui/src/types.ts` together. Usage uploads stay absolute totals.
+9. **Never weaken a fallback into a crash.** Network, parse and permission failures degrade to
+   the last stored policy; the accessibility service must survive any of them.
+10. **Keep the server lean** for a 1GB VPS: one SQLite connection, no new runtimes or services.
+    The web UI is embedded; there is no separate web server.
 
 ## Code conventions
 
@@ -482,59 +426,42 @@ Don't add without a real need: any DI framework (Hilt/Koin) — `BlockApplicatio
 Navigation-Compose — the `sealed class` + `when` (three bottom-bar tabs, Today/History/Settings,
 plus nine sub-screens) is
 sufficient; WorkManager —
-`AlarmManager` already covers expiry and exact timing matters; any networking, analytics, or crash
-library — see invariant 8; LiveData or RxJava — the codebase is coroutines/Flow throughout.
+`AlarmManager` already covers expiry and exact timing matters; analytics or crash libraries; LiveData or RxJava — the codebase is coroutines/Flow throughout.
 
 Kotlin, the Compose compiler plugin, and KSP versions move together — bumping one alone will fail
 the build.
 
 ## Before changing anything
 
-1. **Locate the mechanism first.** Enforcement is spread across the accessibility service,
-   `BlockApplication`, `AlarmScheduler`, and `BlockRepository` by design. Grep for the symbol
-   across all of them before editing one; a change to `activeLocks` semantics touches the UI, the
-   watchdog, and the foreground service at once.
-2. **Read the comments before deciding something is redundant.** Most of the defensive code here
-   is load-bearing and says so. A debounce, a duplicate sweep, or a second enforcement point is
-   usually a recorded bug fix, not an oversight.
-3. **Ask what happens when the process dies mid-lock**, since that is this app's normal failure
-   mode, not an edge case. New state must survive process death (Room), and anything recovered at
-   startup must be recovered in `BlockApplication`/`onServiceConnected`, not only in the UI.
-4. **Check both directions of a permission being absent.** Every protective capability here is
-   revocable at any moment. New code depending on one needs a defined behaviour when it's missing.
-5. **Keep the user's way out intact** — re-read invariant 1 for anything touching navigation,
-   removal, or admin state.
+1. **Locate the mechanism first.** A rule is enforced in up to five places (server, Policy.kt,
+   model.rs, extension, UI copy). Grep all of them before changing one.
+2. **Read the comments before deciding something is redundant.** Most defensive code here is a
+   recorded bug fix.
+3. **Ask what happens when the process dies or the network drops** mid-focus. Enforcement must
+   come back from stored state (`Policy.load`, desktop `enforce.json`) without the server.
+4. **Check both directions of a permission being absent.**
+5. **Keep the user's way out intact** (invariant 1).
 
 ## Verifying a change
 
-No automated tests, so on-device verification is the only real signal. A real device also matters
-because OEM battery managers, Settings activity class names, and Safe Mode behave differently
-than an emulator. Worth walking through for enforcement changes:
+No automated tests. Worth walking through for enforcement changes (an emulator works for most;
+`adb shell settings put secure enabled_accessibility_services …`, `appops set … GET_USAGE_STATS
+allow` and `dpm set-active-admin …` skip the setup taps; write `shared_prefs/keel_session.xml`
+via `run-as` to sign in):
 
-- Lock an app, confirm it bounces to the overlay, and confirm the countdown ticks.
-- Force-stop the app from Settings, reopen the locked app — enforcement should resume
-  (`onServiceConnected` recovery + watchdog).
-- Reboot with a lock active — the lock should survive and still auto-expire on time.
-- Let a short lock expire while the app is backgrounded — it should clear itself, not stick at
-  "Unlocking…".
-- With Device Admin active, try to reach Settings → Accessibility, the Device Admin list, and this
-  app's App Info — each should bounce, and the rest of Settings should stay usable.
-- Confirm `RemoveProtectionScreen` still deactivates admin and returns control.
-- With a lock running: Settings → Security → Device admin apps → App Blocker → Deactivate must
-  bounce (Pixel `SubSettings` included), and so must Accessibility → App Blocker and App info.
-  `RemoveProtectionScreen` must refuse. With no lock, it must still remove admin.
-- Switch an app's counting off in Reel engine: it must keep counting today and stop tomorrow.
-- Apply an unlock key, then apply the same key again — the second attempt must be rejected as
-  already used.
-- Upgrade over a v4 install (1.2, not a fresh one): the DB must open at v5 with `plan_days`,
-  locks and reel counts intact. (Done on the emulator for 1.3.)
-- With a lock running, kill the process with the screen off: it must come back without
-  crashing, and `adb logcat -s BlockGuardService` shows whether the keep-alive start was refused.
-- With reel-free hours covering now, open a reel viewer: BACK plus the "Reel-free hours" wall.
-  With the limit at 0 ("No reels"), the first reel should do the same.
-- Retake the quiz with gentler answers: today's limit and reel-free hours must not loosen.
-- Uninstall and reinstall after a backup (`adb shell bmgr backupnow com.blockapp.android`): History,
-  the plan and running locks should all come back.
+- A 0-minute limit on "youtube" set from another device: the YouTube app bounces to the wall,
+  and youtube.com in a browser with the extension shows the in-page wall.
+- Start a strict focus round from the desktop or web: within ~2s a distracting app on the phone
+  bounces with a countdown, and the wall closes itself when the round ends.
+- Reel limit N: count reels on the phone, then in a browser; the N+1th reel anywhere is walled.
+- Raise a limit: today keeps the old one, the UI says the looser one starts tomorrow.
+- Let a task go overdue with lockdown on: distracting apps lock on every device; a 25-minute
+  focus clears it; Remove protection refuses meanwhile and works after.
+- Force-stop / reboot mid-focus with the network off: enforcement resumes from stored policy.
+- With Device Admin active: Settings → Accessibility, Device admin list, App info bounce;
+  Remove protection still removes admin outside focus/lockdown.
+- Desktop: a 0-minute limit on a `desktop:<app>` target closes that window and shows the wall
+  (tested on Hyprland with kcalc); tray Quit refuses during focus.
 
 ## Threat model
 

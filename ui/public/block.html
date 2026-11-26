@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Keel</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #0E0F0C; color: #F1F2EC; font-family: Manrope, system-ui, sans-serif; }
+  body { display: grid; place-items: center; text-align: center; }
+  main { max-width: 560px; padding: 24px; }
+  .mark { width: 72px; height: 72px; border-radius: 22px; background: #C6F432; color: #141A00; display: grid; place-items: center; font: 800 38px system-ui; margin: 0 auto 26px; }
+  .ember .mark { background: #FF7A3D; color: #0E0F0C; }
+  h1 { font: 700 40px/1.1 system-ui, sans-serif; margin: 0 0 12px; }
+  p { color: #9A9D93; font-size: 18px; line-height: 1.5; margin: 0; }
+  small { display: block; margin-top: 28px; color: #666A60; font-size: 14px; }
+</style>
+</head>
+<body>
+<main id="m">
+  <div class="mark">K</div>
+  <h1 id="t">Blocked</h1>
+  <p id="p"></p>
+  <small>Closed by Keel. This screen goes away on its own.</small>
+</main>
+<script>
+  const q = new URLSearchParams(location.search);
+  const reason = q.get('reason') || '';
+  const app = q.get('app') || 'That app';
+  const titles = { focus: 'Back to focus', lockdown: 'Lockdown', quiet: 'Quiet hours', limit: `${app}: done for today`, reels: 'Reel limit reached' };
+  document.getElementById('t').textContent = titles[reason] || 'Blocked';
+  document.getElementById('p').textContent = q.get('msg') || '';
+  if (reason === 'lockdown' || reason === 'limit') document.getElementById('m').className = 'ember';
+</script>
+</body>
+</html>
