@@ -50,6 +50,7 @@ function ThisDevice() {
   return (
     <Panel title="This computer">
       <Check ok={st.tracking} label={`Window tracking${st.backend ? ` (${st.backend})` : ''}`} />
+      {st.bridgeError && <p class="bad small">{st.bridgeError}</p>}
       <Check ok={st.extension} label={st.extension ? `Browser extension connected${st.extensionBrowser ? ` (${st.extensionBrowser})` : ''}` : 'Browser extension not connected: websites and reels go uncounted'} fix="How?" onFix={() => bridge.action('openExtensionHelp')} />
       <Toggle on={!!st.autostart} onChange={(v) => bridge.action('autostart', v ? 'on' : 'off').then(load)} label="Start with the computer" sub="Limits only hold while Keel is running." />
       {st.active && <p class="muted small mt-s">Now: {st.active}</p>}

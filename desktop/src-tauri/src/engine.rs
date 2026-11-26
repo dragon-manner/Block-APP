@@ -333,6 +333,7 @@ impl Engine {
             "active": self.current.as_ref().map(|c| self.catalog.name(&c.0)),
             "lastSync": if self.last_sync > 0 { Some(self.last_sync) } else { None },
             "syncError": if self.sync_error.is_empty() { None } else { Some(self.sync_error.clone()) },
+            "bridgeError": crate::ext::BIND_ERROR.lock().unwrap().clone(),
             "version": env!("CARGO_PKG_VERSION"),
         })
     }

@@ -12,7 +12,7 @@ phone closes Instagram until the round ends.
  Android app ─┐                         ┌─ Desktop app (Linux / Windows)
  (reel engine,│   HTTPS + WebSocket     │  (active-window tracking,
  a11y blocker)├────── keel-server ──────┤   closes blocked apps)
-              │   (Go, SQLite, ~12MB)   │        │ 127.0.0.1:47321
+              │   (Go, SQLite, ~12MB)   │        │ 127.0.0.1:47823
  Web dashboard┘                         └─ Browser extension
                                             (counts reels, walls sites)
 ```
@@ -88,7 +88,7 @@ and **Windows**. GNOME on Wayland gives apps no way to see the active window.
 Chrome/Edge: `chrome://extensions` → Developer mode → Load unpacked → `extension/`.
 Brave on this machine: add `--load-extension=/path/to/Block-APP/extension` to
 `~/.config/brave-flags.conf`. Firefox: `about:debugging` → Load Temporary Add-on, or sign the
-zip from Releases. The extension talks only to the Keel desktop app on `127.0.0.1:47321`; with
+zip from Releases. The extension talks only to the Keel desktop app on `127.0.0.1:47823`; with
 the desktop app closed it shows a "!" badge and nothing in that browser is counted.
 
 ## How strong is it?

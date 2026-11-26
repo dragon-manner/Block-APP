@@ -289,7 +289,7 @@ extension walls the tab. Tray Quit waits out focus/lockdown. Reverse-DNS classes
 (`org.kde.kcalc`) are normalised to their last part so targets match the Windows exe name.
 State (session, today's usage, last enforcement) lives in `~/.local/share/keel` / `%APPDATA%`.
 
-**Extension bridge** (`ext.rs`, 127.0.0.1:47321) only answers requests carrying an
+**Extension bridge** (`ext.rs`, 127.0.0.1:47823) only answers requests carrying an
 `X-Keel-Ext` header from extension origins, so a web page can't spoof reel counts. Reel ids are
 de-duplicated per day; a reel opened over the limit is walled, not counted.
 

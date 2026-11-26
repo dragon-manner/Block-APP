@@ -11,7 +11,12 @@ use std::io::Read;
 use std::sync::{Arc, Mutex};
 use tiny_http::{Header, Method, Response, Server};
 
-pub const PORT: u16 = 47321;
+// 47321 was the first choice and collided with StreamVault on the dev machine, so the bridge
+// silently never started and the extension talked to the wrong app. A failed bind is now
+// reported in the Devices screen ([BIND_ERROR]) instead of only in a log nobody reads.
+pub const PORT: u16 = 47823;
+
+pub static BIND_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 fn header(k: &str, v: &str) -> Header {
     Header::from_bytes(k.as_bytes(), v.as_bytes()).expect("static header")
@@ -27,6 +32,7 @@ pub fn start(engine: Arc<Mutex<Engine>>, sync: Arc<Sync>) {
             Ok(s) => s,
             Err(e) => {
                 log::error!("extension bridge could not bind {PORT}: {e}");
+                *BIND_ERROR.lock().unwrap() = Some(format!("Port {PORT} is taken by another app, so the browser extension can't connect ({e})"));
                 return;
             }
         };

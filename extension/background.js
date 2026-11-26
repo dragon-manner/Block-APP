@@ -5,7 +5,7 @@
 // The worker is woken by the content scripts' heartbeats, which is also what keeps it alive
 // while you browse: MV3 suspends idle workers, and a timer here would not survive that.
 
-const BRIDGE = 'http://127.0.0.1:47321';
+const BRIDGE = 'http://127.0.0.1:47823';
 const api = globalThis.browser ?? globalThis.chrome;
 const BROWSER = navigator.userAgent.includes('Firefox') ? 'Firefox'
   : navigator.userAgent.includes('Edg/') ? 'Edge'
