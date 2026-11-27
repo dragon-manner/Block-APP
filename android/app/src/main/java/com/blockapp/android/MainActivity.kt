@@ -106,9 +106,12 @@ class MainActivity : ComponentActivity() {
         view.settings.allowFileAccess = false
         view.settings.allowContentAccess = false
         // Debug builds only: lets the UI (an https asset origin) reach a dev keel-server over
-        // plain http on the emulator host. Release keeps the default, which blocks it.
+        // plain http on the emulator host. Release keeps the default, which blocks it. Also
+        // opens the WebView to chrome://inspect: a bridge or fetch failure in the UI is
+        // otherwise invisible on the phone, since nothing surfaces the page's console.
         if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
             view.settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            WebView.setWebContentsDebuggingEnabled(true)
         }
         view.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(v: WebView, request: WebResourceRequest): WebResourceResponse? =
